@@ -8,6 +8,7 @@ import {
   Color, 
   JulianDate, 
   createWorldTerrainAsync,
+  createOsmBuildingsAsync,
   ClockRange,
   ClockStep,
   Math as CesiumMath,
@@ -35,7 +36,7 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [isMenuOpen, setIsMenuOpen] = useState(!isMobile);
   
-  // Custom Modal für Splat App (Umgeht Cesium Sandbox)
+  // Custom Modal für Splat App
   const [activeSplatUrl, setActiveSplatUrl] = useState<string | null>(null);
   const [activeSplatName, setActiveSplatName] = useState<string | null>(null);
 
@@ -44,9 +45,11 @@ export default function App() {
     liveEarthquakes: true,
     digi4: true,
     terrain3D: true,
+    osmBuildings: false, // NEU: 3D Gebäude
     issTracker: false,
     wildfires: false,
     volcanoes: false,
+    severeStorms: false, // NEU: Stürme
     seaIce: false,
     meteorites: false,
   });
@@ -61,12 +64,14 @@ export default function App() {
   const [issData, setIssData] = useState<any>(null);
   const [wildfiresData, setWildfiresData] = useState<any[]>([]);
   const [volcanoesData, setVolcanoesData] = useState<any[]>([]);
+  const [stormsData, setStormsData] = useState<any[]>([]);
   const [seaIceData, setSeaIceData] = useState<any[]>([]);
   const [meteoriteData, setMeteoriteData] = useState<any[]>([]);
   
   const [lastSync, setLastSync] = useState<string>('Syncing...');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncRealTime, setSyncRealTime] = useState<boolean>(true);
+  const [globeLighting, setGlobeLighting] = useState<boolean>(false); // NEU: Tag/Nacht Zyklus
 
   useEffect(() => {
     const handleResize = () => {
@@ -78,6 +83,7 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Terrain Layer Toggle
   useEffect(() => {
     if (viewerRef.current?.cesiumElement) {
       const viewer = viewerRef.current.cesiumElement;
@@ -93,6 +99,33 @@ export default function App() {
     }
   }, [layers.terrain3D]);
 
+  // NEU: OSM Buildings Layer Toggle
+  useEffect(() => {
+    if (!viewerRef.current?.cesiumElement) return;
+    const viewer = viewerRef.current.cesiumElement;
+    let tileset: any;
+
+    if (layers.osmBuildings) {
+      createOsmBuildingsAsync().then(ts => {
+        tileset = ts;
+        viewer.scene.primitives.add(tileset);
+      });
+    }
+
+    return () => {
+      if (tileset && !viewer.isDestroyed) {
+        viewer.scene.primitives.remove(tileset);
+      }
+    };
+  }, [layers.osmBuildings]);
+
+  // NEU: Globe Lighting Toggle
+  useEffect(() => {
+    if (viewerRef.current?.cesiumElement) {
+      viewerRef.current.cesiumElement.scene.globe.enableLighting = globeLighting;
+    }
+  }, [globeLighting]);
+
   useEffect(() => {
     if (layers.meteorites && meteoriteData.length === 0) {
       fetch('https://data.nasa.gov/resource/gh4g-9sfh.json?$limit=100')
@@ -105,12 +138,11 @@ export default function App() {
     }
   }, [layers.meteorites]);
 
-  // --- KLICK-LOGIK (Interception für Digi4 Kameras) ---
+  // --- KLICK-LOGIK ---
   const handleMapClick = (movement: any) => {
     if (!viewerRef.current?.cesiumElement) return;
     const viewer = viewerRef.current.cesiumElement;
     
-    // 1. Prüfen, ob eine Digi4 Kamera angeklickt wurde
     const pickedObject = viewer.scene.pick(movement.position);
     if (pickedObject && pickedObject.id && typeof pickedObject.id.name === 'string' && pickedObject.id.name.startsWith('Digi4 Cam:')) {
       const camName = pickedObject.id.name.replace('Digi4 Cam: ', '');
@@ -118,13 +150,11 @@ export default function App() {
       if (link) {
         setActiveSplatUrl(link.url);
         setActiveSplatName(camName);
-        // Deselektieren, damit die native Cesium InfoBox nicht stört
         setTimeout(() => { viewer.selectedEntity = undefined; }, 10);
         return; 
       }
     }
 
-    // 2. Reguläre Koordinaten-Logik
     const cartesian = viewer.camera.pickEllipsoid(movement.position, viewer.scene.globe.ellipsoid);
     if (cartesian) {
       import('cesium').then(({ Cartographic, Math: CesiumMath }) => {
@@ -141,6 +171,39 @@ export default function App() {
           setCustomPins(prev => [...prev, { lat: parseFloat(lat), lng: parseFloat(lng) }]);
         }
       });
+    }
+  };
+
+  // NEU: Pin in der Bildschirmmitte droppen (für Mobile)
+  const dropPinAtCenter = () => {
+    if (!viewerRef.current?.cesiumElement) return;
+    const viewer = viewerRef.current.cesiumElement;
+    const canvas = viewer.canvas;
+    const center = new Cartesian3(canvas.clientWidth / 2, canvas.clientHeight / 2, 0);
+    const cartesian = viewer.camera.pickEllipsoid(center, viewer.scene.globe.ellipsoid);
+    
+    if (cartesian) {
+      import('cesium').then(({ Cartographic, Math: CesiumMath }) => {
+        const cartographic = Cartographic.fromCartesian(cartesian);
+        const lng = CesiumMath.toDegrees(cartographic.longitude);
+        const lat = CesiumMath.toDegrees(cartographic.latitude);
+        setCustomPins(prev => [...prev, { lat, lng }]);
+      });
+    }
+  };
+
+  // NEU: GPS Standort finden
+  const locateMe = () => {
+    if (navigator.geolocation && viewerRef.current?.cesiumElement) {
+      navigator.geolocation.getCurrentPosition((pos) => {
+        const { latitude, longitude } = pos.coords;
+        viewerRef.current.cesiumElement.camera.flyTo({
+          destination: Cartesian3.fromDegrees(longitude, latitude, 5000),
+          duration: 2
+        });
+      }, (err) => console.warn("GPS failed", err));
+    } else {
+      alert("Geolocation is not supported by this browser.");
     }
   };
 
@@ -178,13 +241,14 @@ export default function App() {
       } catch (e) {}
     }
 
-    if (layers.wildfires || layers.volcanoes || layers.seaIce) {
+    if (layers.wildfires || layers.volcanoes || layers.seaIce || layers.severeStorms) {
       try {
         const eonetRes = await fetch('https://eonet.gsfc.nasa.gov/api/v3/events?status=open');
         const eonetData = await eonetRes.json();
         if (layers.wildfires) setWildfiresData(eonetData.events.filter((e: any) => e.categories[0].id === 'wildfires'));
         if (layers.volcanoes) setVolcanoesData(eonetData.events.filter((e: any) => e.categories[0].id === 'volcanoes'));
         if (layers.seaIce) setSeaIceData(eonetData.events.filter((e: any) => e.categories[0].id === 'seaIce'));
+        if (layers.severeStorms) setStormsData(eonetData.events.filter((e: any) => e.categories[0].id === 'severeStorms'));
       } catch (e) {}
     }
 
@@ -217,14 +281,33 @@ export default function App() {
         .pulse-dot.active { animation: pulse 1s infinite; background: #ff3333; }
         .glass-panel::-webkit-scrollbar { width: 6px; }
         .glass-panel::-webkit-scrollbar-thumb { background: rgba(0, 255, 204, 0.3); border-radius: 4px; }
+        
         .mobile-toggle {
           position: absolute; bottom: 20px; right: 20px; z-index: 200; background: rgba(10, 15, 20, 0.85); color: #00ffcc; 
-          border: 1px solid #00ffcc; padding: 12px; border-radius: 50%; cursor: pointer; backdrop-filter: blur(10px); display: none;
+          border: 1px solid #00ffcc; padding: 12px 16px; border-radius: 50px; cursor: pointer; backdrop-filter: blur(10px); display: none;
+          font-family: monospace; font-weight: bold; box-shadow: 0 4px 15px rgba(0,255,204,0.3);
         }
-        @media (max-width: 768px) { .mobile-toggle { display: block; } }
+        
+        /* Mobile Specific Layout */
+        @media (max-width: 768px) { 
+          .mobile-toggle { display: block; } 
+          .glass-panel {
+            top: auto !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            border-radius: 20px 20px 0 0 !important;
+            transform: translateY(${isMenuOpen ? '0%' : '100%'});
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            max-height: 80vh !important;
+            border-left: none !important;
+            border-right: none !important;
+            border-bottom: none !important;
+          }
+        }
       `}</style>
 
-      {/* --- NEU: UN-SANDBOXED SPLAT VIEWER MODAL --- */}
+      {/* --- SPLAT VIEWER MODAL --- */}
       {activeSplatUrl && (
         <div style={{
           position: 'absolute', top: isMobile ? '5%' : '10%', left: isMobile ? '5%' : '15%', 
@@ -234,14 +317,13 @@ export default function App() {
           boxShadow: '0 0 40px rgba(0, 255, 204, 0.3)', backdropFilter: 'blur(10px)'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 20px', borderBottom: '1px solid rgba(0,255,204,0.2)' }}>
-            <h3 style={{ margin: 0, color: '#00ffcc', fontFamily: 'monospace' }}>🛰️ LIVE SPLAT FEED: {activeSplatName?.toUpperCase()}</h3>
+            <h3 style={{ margin: 0, color: '#00ffcc', fontFamily: 'monospace', fontSize: isMobile ? '1rem' : '1.17rem' }}>🛰️ SPLAT FEED: {activeSplatName?.toUpperCase()}</h3>
             <div style={{display: 'flex', gap: '15px'}}>
               <a href={activeSplatUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#fff', textDecoration: 'none', fontFamily: 'monospace', alignSelf: 'center', fontSize: '0.85rem' }}>[ NEW TAB ]</a>
               <button onClick={() => setActiveSplatUrl(null)} style={{ background: 'rgba(255, 51, 51, 0.2)', border: '1px solid #ff3333', color: '#ff3333', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>X</button>
             </div>
           </div>
           <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
-            {/* Standard React iFrame OHNE Sandbox Attribute! WebGL läuft hier einwandfrei. */}
             <iframe 
               src={`${activeSplatUrl}?mode=embed`} 
               style={{ width: '100%', height: '100%', border: 'none' }} 
@@ -252,17 +334,20 @@ export default function App() {
         </div>
       )}
 
+      {/* FAB (Floating Action Button) für Mobile Menü */}
       <button className="mobile-toggle" onClick={() => setIsMenuOpen(!isMenuOpen)}>
-        {isMenuOpen ? '✖' : '☰'}
+        {isMenuOpen ? 'CLOSE DATA PANNEL ▼' : 'OPEN DATA PANNEL ▲'}
       </button>
 
       {/* --- GLASSMORPHISM UI PANEL --- */}
       <div className="glass-panel" style={{
-        position: 'absolute', top: isMobile ? 'auto' : 20, bottom: isMobile ? (isMenuOpen ? 20 : '-100%') : 'auto', left: isMobile ? '5%' : 20, 
-        zIndex: 100, width: isMobile ? '90%' : '340px', maxHeight: isMobile ? '70vh' : '90vh', overflowY: 'auto',
-        background: 'rgba(10, 15, 20, 0.75)', color: '#00ffcc', padding: '25px', borderRadius: '16px', border: '1px solid rgba(0, 255, 204, 0.2)', 
-        fontFamily: 'monospace', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)', transition: 'bottom 0.3s ease-in-out', boxSizing: 'border-box'
+        position: 'absolute', top: 20, left: 20, zIndex: 100, width: '340px', maxHeight: '90vh', overflowY: 'auto',
+        background: 'rgba(10, 15, 20, 0.85)', color: '#00ffcc', padding: '25px', borderRadius: '16px', border: '1px solid rgba(0, 255, 204, 0.2)', 
+        fontFamily: 'monospace', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)', boxSizing: 'border-box'
       }}>
+        {/* Mobile Drag Handle Indicator */}
+        {isMobile && <div style={{width: '40px', height: '4px', background: 'rgba(255,255,255,0.3)', borderRadius: '2px', margin: '0 auto 15px auto'}} />}
+
         <h2 style={{ margin: '0 0 15px 0', fontSize: '1.3rem', textTransform: 'uppercase', letterSpacing: '2px', textShadow: '0 0 10px rgba(0,255,204,0.5)' }}>God's Eye OSINT</h2>
 
         <div style={{ background: 'rgba(0, 30, 15, 0.5)', padding: '12px', borderRadius: '10px', marginBottom: '20px', border: '1px solid rgba(0, 255, 204, 0.1)' }}>
@@ -272,9 +357,16 @@ export default function App() {
             </span>
             <span style={{ fontSize: '0.75rem', color: '#888' }}>{lastSync}</span>
           </div>
-          <div style={{ fontSize: '0.85rem', marginTop: '8px', color: '#00ffcc', display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-            Tracking: <strong>{flights.length}</strong> FLT | <strong>{earthquakes.length}</strong> EQ | <strong>{wildfiresData.length}</strong> FIRE
-          </div>
+        </div>
+
+        {/* NEU: Schnelle Aktionen (Mobile Friendly) */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '20px' }}>
+          <button onClick={locateMe} style={{ background: 'rgba(0, 150, 255, 0.2)', color: '#4da6ff', border: '1px solid #4da6ff', padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>
+            🎯 Locate Me
+          </button>
+          <button onClick={dropPinAtCenter} style={{ background: 'rgba(255, 0, 255, 0.2)', color: '#ff4dff', border: '1px solid #ff4dff', padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>
+            📍 Drop Pin
+          </button>
         </div>
 
         <div style={{ marginBottom: '20px' }}>
@@ -290,10 +382,14 @@ export default function App() {
         </div>
 
         <div style={{ marginBottom: '20px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '15px' }}>
-          <strong style={{ color: '#fff' }}>⏱️ Environment</strong>
+          <strong style={{ color: '#fff' }}>⏱️ Environment & System</strong>
           <label style={{ display: 'flex', alignItems: 'center', marginTop: '10px', cursor: 'pointer', color: '#ccc', fontSize: '0.9rem' }}>
             <input type="checkbox" checked={syncRealTime} onChange={() => setSyncRealTime(!syncRealTime)} style={{ marginRight: '10px', accentColor: '#00ffcc', width: '16px', height: '16px' }} />
-            Sync Real-Time Shadows
+            Sync Real-Time Clock
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', marginTop: '10px', cursor: 'pointer', color: '#ccc', fontSize: '0.9rem' }}>
+            <input type="checkbox" checked={globeLighting} onChange={() => setGlobeLighting(!globeLighting)} style={{ marginRight: '10px', accentColor: '#ffcc00', width: '16px', height: '16px' }} />
+            Day/Night Lighting (Sun)
           </label>
         </div>
 
@@ -309,19 +405,33 @@ export default function App() {
         </div>
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '15px', fontSize: '0.75rem', color: '#888' }}>
-          <p style={{ margin: '0 0 5px 0' }}>📍 <strong>UX Controls:</strong></p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+            <p style={{ margin: 0 }}>📍 <strong>UX Controls:</strong></p>
+            {customPins.length > 0 && (
+              <button onClick={() => setCustomPins([])} style={{ background: 'transparent', color: '#ff3333', border: 'none', cursor: 'pointer', fontSize: '0.75rem', textDecoration: 'underline' }}>Clear Pins</button>
+            )}
+          </div>
           <ul style={{ paddingLeft: '15px', margin: '0', lineHeight: '1.4' }}>
-            <li>Click Digi4 points for Live Splat</li>
+            <li>Click points for Info/Splat</li>
             <li>Double-Click aircraft to track</li>
-            <li>Ctrl+Click to drop custom pin</li>
+            <li>Ctrl+Click (Desktop) to drop pin</li>
           </ul>
           {copiedCoords && <div style={{ color: '#00ffcc', marginTop: '10px', fontWeight: 'bold' }}>Copied: {copiedCoords}</div>}
         </div>
       </div>
 
       {/* --- CESIUM VIEWER --- */}
+      {/* Auf Mobile werden Timeline & Animation ausgeblendet, um Screen-Platz zu sparen */}
       <Viewer 
-        ref={viewerRef} full timeline={true} animation={true} infoBox={true} shadows={true} geocoder={true} homeButton={true} navigationHelpButton={false}
+        ref={viewerRef} 
+        full 
+        timeline={!isMobile} 
+        animation={!isMobile} 
+        infoBox={true} 
+        shadows={globeLighting} 
+        geocoder={true} 
+        homeButton={true} 
+        navigationHelpButton={false}
         onClick={handleMapClick}
       >
         <Scene />
@@ -334,7 +444,7 @@ export default function App() {
           <CameraFlyTo destination={Cartesian3.fromDegrees(activeBookmark.lng, activeBookmark.lat, activeBookmark.height)} orientation={{ heading: CesiumMath.toRadians(activeBookmark.heading), pitch: CesiumMath.toRadians(activeBookmark.pitch), roll: 0.0 }} duration={3} onComplete={() => setActiveBookmark(null)} />
         )}
 
-        {/* --- DIGI4 LINKS OHNE iFRAME IM DESCRIPTION-FELD --- */}
+        {/* --- DIGI4 LINKS --- */}
         {layers.digi4 && DIGI4_LINKS.map((loc, idx) => (
           <Entity 
             key={`digi4-${idx}`} name={`Digi4 Cam: ${loc.name}`} position={Cartesian3.fromDegrees(loc.lng, loc.lat, 0)}
@@ -385,6 +495,13 @@ export default function App() {
         {layers.volcanoes && volcanoesData.map((volcano: any) => (
           <Entity key={`volc-${volcano.id}`} position={Cartesian3.fromDegrees(volcano.geometry[0].coordinates[0], volcano.geometry[0].coordinates[1], 0)} name={volcano.title}>
             <PointGraphics pixelSize={14} color={Color.DARKRED} outlineColor={Color.YELLOW} outlineWidth={2} />
+          </Entity>
+        ))}
+
+        {/* NEU: Severe Storms Layer */}
+        {layers.severeStorms && stormsData.map((storm: any) => (
+          <Entity key={`storm-${storm.id}`} position={Cartesian3.fromDegrees(storm.geometry[0].coordinates[0], storm.geometry[0].coordinates[1], 0)} name={storm.title}>
+            <PointGraphics pixelSize={16} color={Color.BLUEVIOLET} outlineColor={Color.WHITE} outlineWidth={2} />
           </Entity>
         ))}
 
