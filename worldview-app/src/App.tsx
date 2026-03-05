@@ -46,10 +46,10 @@ export default function App() {
     digi4: true,
     terrain3D: true,
     osmBuildings: false, 
-    issTracker: false,
+    issTracker: true,
     wildfires: false,
     volcanoes: false,
-    severeStorms: false, 
+    severeStorms: true, 
     seaIce: false,
     meteorites: false,
   });
