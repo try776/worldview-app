@@ -42,8 +42,8 @@ export default function App() {
 
   const [layers, setLayers] = useState({
     liveFlights: true,
-    satellites: true,      // NEU: Satelliten
-    globalShips: true,     // NEU: Schiffe
+    satellites: true,      
+    globalShips: true,     
     liveEarthquakes: true,
     digi4: true,
     terrain3D: true,
@@ -70,7 +70,6 @@ export default function App() {
   const [seaIceData, setSeaIceData] = useState<any[]>([]);
   const [meteoriteData, setMeteoriteData] = useState<any[]>([]);
   
-  // NEU: States für Schiffe und Satelliten
   const [satellitesData, setSatellitesData] = useState<any[]>([]);
   const [shipsData, setShipsData] = useState<any[]>([]);
   
@@ -87,6 +86,21 @@ export default function App() {
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Fix für das Cesium InfoBox iFrame Sandbox Problem (erlaubt externe Links und Scripte)
+  useEffect(() => {
+    const fixInfoBox = () => {
+      if (viewerRef.current?.cesiumElement?.infoBox?.frame) {
+        viewerRef.current.cesiumElement.infoBox.frame.setAttribute(
+          'sandbox',
+          'allow-same-origin allow-popups allow-forms allow-scripts allow-popups-to-escape-sandbox allow-top-navigation'
+        );
+      } else {
+        setTimeout(fixInfoBox, 200); // Erneut versuchen, falls der Viewer noch nicht bereit ist
+      }
+    };
+    fixInfoBox();
   }, []);
 
   // Terrain Layer Toggle
@@ -234,16 +248,15 @@ export default function App() {
     const ships = [];
     const types = ['Cargo Vessel', 'Oil Tanker', 'Passenger/Cruise', 'Fishing', 'Military'];
     for(let i=0; i<500; i++) {
-      // Simuliere Positionen, die grob auf Ozeanen liegen (Vermeidung von tiefen Inlands-Koordinaten)
       ships.push({
         id: `ship-${i}`,
         name: `Vessel ${Math.floor(Math.random()*9000)+100}`,
         mmsi: Math.floor(Math.random()*900000000)+100000000,
         type: types[Math.floor(Math.random()*types.length)],
-        lat: (Math.random() - 0.5) * 140, // Keine extremen Pole
+        lat: (Math.random() - 0.5) * 140, 
         lng: (Math.random() - 0.5) * 360,
         heading: Math.random() * 360,
-        speed: (Math.random() * 25).toFixed(1) // in Knoten
+        speed: (Math.random() * 25).toFixed(1) 
       });
     }
     return ships;
@@ -263,17 +276,15 @@ export default function App() {
 
     if (layers.liveFlights) {
       try {
-        // GLOBAL FETCH: Bounding Box entfernt
         const flightRes = await fetch('https://opensky-network.org/api/states/all');
         if (flightRes.ok) {
           const flightData = await flightRes.json();
-          // Begrenze auf 800 Flugzeuge, um WebGL Abstürze durch tausende 3D Modelle zu verhindern
           const parsedFlights = (flightData.states || [])
             .filter((f: any) => f[5] && f[6])
             .map((f: any) => ({
               id: f[0], 
               callsign: f[1]?.trim() || 'UNKNOWN', 
-              country: f[2] || 'Unknown', // Ursprungsland
+              country: f[2] || 'Unknown', 
               lng: f[5], 
               lat: f[6], 
               alt: f[7] || 10000, 
@@ -306,7 +317,6 @@ export default function App() {
       } catch (e) {}
     }
 
-    // Initialize Sim Data if empty
     if (layers.satellites && satellitesData.length === 0) {
       setSatellitesData(generateSimulatedSatellites());
     }
@@ -513,7 +523,6 @@ export default function App() {
           </Entity>
         ))}
 
-        {/* NEU: Globale Flüge mit mehr Infos und FlightRadar24 Link */}
         {layers.liveFlights && flights.map((flight) => {
           const position = Cartesian3.fromDegrees(flight.lng, flight.lat, flight.alt);
           const heading = CesiumMath.toRadians(flight.heading - 90);
@@ -543,7 +552,6 @@ export default function App() {
           );
         })}
 
-        {/* NEU: Satelliten Layer */}
         {layers.satellites && satellitesData.map((sat) => (
           <Entity 
             key={sat.id} 
@@ -562,7 +570,6 @@ export default function App() {
           </Entity>
         ))}
 
-        {/* NEU: Globale Schiffe Layer */}
         {layers.globalShips && shipsData.map((ship) => (
           <Entity 
             key={ship.id} 
