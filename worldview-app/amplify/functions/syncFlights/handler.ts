@@ -1,10 +1,19 @@
 // amplify/functions/syncFlights/handler.ts
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, ScanCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, ScanCommand, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from '$amplify/env/syncFlights';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
+
+// Hilfsfunktion: Teilt ein riesiges Array in kleine Arrays auf (DynamoDB Limit ist 25)
+const chunkArray = (arr: any[], size: number) => {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+};
 
 export const handler = async (event: any) => {
   console.log('Fetching OpenSky data...');
@@ -15,10 +24,9 @@ export const handler = async (event: any) => {
     
     const data = await res.json();
     const flights = (data.states || [])
-      .filter((f: any) => f[5] && f[6])
-      .slice(0, 150) // RAM Optimierung direkt beim Abholen
+      .filter((f: any) => f[5] && f[6]) // Nur Flüge mit Koordinaten
       .map((f: any) => ({
-        id: f[0], // ICAO24 als eindeutige ID
+        id: f[0],
         callsign: f[1]?.trim() || 'UNKNOWN',
         country: f[2] || 'Unknown',
         lng: f[5],
@@ -29,29 +37,41 @@ export const handler = async (event: any) => {
         squawk: f[14] || 'N/A'
       }));
 
-    // Alte Daten bereinigen (verhindert, dass gelandete Flüge als Geister bleiben)
+    const tableName = env.AMPLIFY_DATA_FLIGHT_TABLE_NAME;
+
+    // 1. Alte Daten löschen (im Batch)
+    console.log('Scanning old flights to delete...');
     const scanResponse = await docClient.send(new ScanCommand({
-      TableName: env.AMPLIFY_DATA_FLIGHT_TABLE_NAME
+      TableName: tableName
     }));
     
-    if (scanResponse.Items) {
-      for (const item of scanResponse.Items) {
-        await docClient.send(new DeleteCommand({
-          TableName: env.AMPLIFY_DATA_FLIGHT_TABLE_NAME,
-          Key: { id: item.id }
+    if (scanResponse.Items && scanResponse.Items.length > 0) {
+      const deleteRequests = scanResponse.Items.map(item => ({
+        DeleteRequest: { Key: { id: item.id } }
+      }));
+      
+      const deleteChunks = chunkArray(deleteRequests, 25);
+      for (const chunk of deleteChunks) {
+        await docClient.send(new BatchWriteCommand({
+          RequestItems: { [tableName]: chunk }
         }));
       }
     }
 
-    // Neue Daten in die Datenbank pushen
-    for (const flight of flights) {
-      await docClient.send(new PutCommand({
-        TableName: env.AMPLIFY_DATA_FLIGHT_TABLE_NAME,
-        Item: flight
+    // 2. Neue 10.000+ Daten speichern (im Batch)
+    console.log(`Writing ${flights.length} new flights...`);
+    const putRequests = flights.map((flight: any) => ({
+      PutRequest: { Item: flight }
+    }));
+
+    const putChunks = chunkArray(putRequests, 25);
+    for (const chunk of putChunks) {
+      await docClient.send(new BatchWriteCommand({
+        RequestItems: { [tableName]: chunk }
       }));
     }
 
-    console.log(`Successfully synced ${flights.length} flights.`);
+    console.log(`Successfully synced ${flights.length} flights worldwide.`);
     return { statusCode: 200, body: 'Success' };
 
   } catch (error) {
