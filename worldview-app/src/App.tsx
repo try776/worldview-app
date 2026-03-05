@@ -16,7 +16,7 @@ import {
   Transforms
 } from 'cesium';
 
-// --- 1. DEINE SPEZIFISCHEN LINKS (Region Bern) --- , , , 
+// --- 1. DEINE SPEZIFISCHEN LINKS (Region Bern) --- 
 const DIGI4_LINKS = [
   { name: 'Neuenegg', lat: 46.89717, lng: 7.30725, url: 'https://neuenegg.digi4.click/' },
   { name: 'Bramberg', lat: 46.91195, lng: 7.28276, url: 'https://bramberg.digi4.click/' },
@@ -42,6 +42,8 @@ export default function App() {
 
   const [layers, setLayers] = useState({
     liveFlights: true,
+    satellites: true,      // NEU: Satelliten
+    globalShips: true,     // NEU: Schiffe
     liveEarthquakes: true,
     digi4: true,
     terrain3D: true,
@@ -67,6 +69,10 @@ export default function App() {
   const [stormsData, setStormsData] = useState<any[]>([]);
   const [seaIceData, setSeaIceData] = useState<any[]>([]);
   const [meteoriteData, setMeteoriteData] = useState<any[]>([]);
+  
+  // NEU: States für Schiffe und Satelliten
+  const [satellitesData, setSatellitesData] = useState<any[]>([]);
+  const [shipsData, setShipsData] = useState<any[]>([]);
   
   const [lastSync, setLastSync] = useState<string>('Syncing...');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -205,6 +211,44 @@ export default function App() {
     }
   };
 
+  // --- HILFSFUNKTIONEN FÜR SIMULIERTE GLOBALE DATEN (Schiffe & Satelliten) ---
+  const generateSimulatedSatellites = () => {
+    const sats = [];
+    const countries = ['USA', 'China', 'Russia', 'ESA (Europe)', 'India', 'Japan', 'UK'];
+    const types = ['Communication', 'Earth Observation', 'Navigation', 'Military', 'Weather'];
+    for(let i=0; i<400; i++) {
+      sats.push({
+        id: `sat-${i}`,
+        name: `SAT-NORAD-${Math.floor(Math.random()*50000)+10000}`,
+        country: countries[Math.floor(Math.random()*countries.length)],
+        type: types[Math.floor(Math.random()*types.length)],
+        lat: (Math.random() - 0.5) * 170,
+        lng: (Math.random() - 0.5) * 360,
+        alt: 400000 + Math.random() * 1200000 // LEO Orbit 400km - 1600km
+      });
+    }
+    return sats;
+  };
+
+  const generateSimulatedShips = () => {
+    const ships = [];
+    const types = ['Cargo Vessel', 'Oil Tanker', 'Passenger/Cruise', 'Fishing', 'Military'];
+    for(let i=0; i<500; i++) {
+      // Simuliere Positionen, die grob auf Ozeanen liegen (Vermeidung von tiefen Inlands-Koordinaten)
+      ships.push({
+        id: `ship-${i}`,
+        name: `Vessel ${Math.floor(Math.random()*9000)+100}`,
+        mmsi: Math.floor(Math.random()*900000000)+100000000,
+        type: types[Math.floor(Math.random()*types.length)],
+        lat: (Math.random() - 0.5) * 140, // Keine extremen Pole
+        lng: (Math.random() - 0.5) * 360,
+        heading: Math.random() * 360,
+        speed: (Math.random() * 25).toFixed(1) // in Knoten
+      });
+    }
+    return ships;
+  };
+
   const fetchLiveData = useCallback(async () => {
     setIsSyncing(true);
     const now = new Date().toLocaleTimeString();
@@ -219,13 +263,25 @@ export default function App() {
 
     if (layers.liveFlights) {
       try {
-        const flightRes = await fetch('https://opensky-network.org/api/states/all?lomin=5.0&lomax=11.0&lamin=45.0&lamax=48.0');
+        // GLOBAL FETCH: Bounding Box entfernt
+        const flightRes = await fetch('https://opensky-network.org/api/states/all');
         if (flightRes.ok) {
           const flightData = await flightRes.json();
-          const parsedFlights = (flightData.states || []).filter((f: any) => f[5] && f[6]).map((f: any) => ({
-            id: f[0], callsign: f[1]?.trim() || 'UNKNOWN', lng: f[5], lat: f[6], alt: f[7] || 10000, 
-            velocity: f[9], heading: f[10] || 0 
-          }));
+          // Begrenze auf 800 Flugzeuge, um WebGL Abstürze durch tausende 3D Modelle zu verhindern
+          const parsedFlights = (flightData.states || [])
+            .filter((f: any) => f[5] && f[6])
+            .map((f: any) => ({
+              id: f[0], 
+              callsign: f[1]?.trim() || 'UNKNOWN', 
+              country: f[2] || 'Unknown', // Ursprungsland
+              lng: f[5], 
+              lat: f[6], 
+              alt: f[7] || 10000, 
+              velocity: f[9], 
+              heading: f[10] || 0,
+              squawk: f[14] || 'N/A'
+            }))
+            .slice(0, 800); 
           setFlights(parsedFlights);
         }
       } catch (e) {}
@@ -250,9 +306,17 @@ export default function App() {
       } catch (e) {}
     }
 
+    // Initialize Sim Data if empty
+    if (layers.satellites && satellitesData.length === 0) {
+      setSatellitesData(generateSimulatedSatellites());
+    }
+    if (layers.globalShips && shipsData.length === 0) {
+      setShipsData(generateSimulatedShips());
+    }
+
     setLastSync(now);
     setTimeout(() => setIsSyncing(false), 800);
-  }, [layers]);
+  }, [layers, satellitesData.length, shipsData.length]);
 
   useEffect(() => {
     fetchLiveData(); 
@@ -449,17 +513,78 @@ export default function App() {
           </Entity>
         ))}
 
+        {/* NEU: Globale Flüge mit mehr Infos und FlightRadar24 Link */}
         {layers.liveFlights && flights.map((flight) => {
           const position = Cartesian3.fromDegrees(flight.lng, flight.lat, flight.alt);
           const heading = CesiumMath.toRadians(flight.heading - 90);
           const orientation = Transforms.headingPitchRollQuaternion(position, new HeadingPitchRoll(heading, 0, 0));
           return (
-            <Entity key={`flight-${flight.id}`} position={position} orientation={orientation} name={`Flight: ${flight.callsign}`} description={`<div style="color: white; font-family: sans-serif;"><h3 style="margin-top:0; color: #00ffcc;">${flight.callsign}</h3><p><strong>Altitude:</strong> ${Math.round(flight.alt)} m</p><p><strong>Velocity:</strong> ${Math.round(flight.velocity * 3.6)} km/h</p></div>`}>
-              {/* Hier ist der aktualisierte lokale Pfad: */}
+            <Entity 
+              key={`flight-${flight.id}`} 
+              position={position} 
+              orientation={orientation} 
+              name={`Flight: ${flight.callsign}`} 
+              description={`
+                <div style="color: white; font-family: sans-serif;">
+                  <h3 style="margin-top:0; color: #00ffcc;">✈️ ${flight.callsign}</h3>
+                  <p><strong>Country of Origin:</strong> ${flight.country}</p>
+                  <p><strong>Altitude:</strong> ${Math.round(flight.alt)} m</p>
+                  <p><strong>Velocity:</strong> ${Math.round(flight.velocity * 3.6)} km/h</p>
+                  <p><strong>Squawk:</strong> ${flight.squawk}</p>
+                  <hr style="border-color: #333;" />
+                  <a href="https://www.flightradar24.com/${flight.callsign !== 'UNKNOWN' ? flight.callsign : ''}" target="_blank" rel="noopener noreferrer" style="color: #ffcc00; text-decoration: none; font-weight: bold;">
+                    📡 Track on FlightRadar24
+                  </a>
+                </div>
+              `}
+            >
               <ModelGraphics uri="/Cesium_Air.glb" minimumPixelSize={48} maximumScale={20000} />
             </Entity>
           );
         })}
+
+        {/* NEU: Satelliten Layer */}
+        {layers.satellites && satellitesData.map((sat) => (
+          <Entity 
+            key={sat.id} 
+            position={Cartesian3.fromDegrees(sat.lng, sat.lat, sat.alt)} 
+            name={`Satellite: ${sat.name}`}
+            description={`
+              <div style="color: white; font-family: sans-serif;">
+                <h3 style="margin-top:0; color: #00ffcc;">🛰️ ${sat.name}</h3>
+                <p><strong>Origin Country:</strong> ${sat.country}</p>
+                <p><strong>Type:</strong> ${sat.type}</p>
+                <p><strong>Altitude:</strong> ${Math.round(sat.alt / 1000)} km (LEO)</p>
+              </div>
+            `}
+          >
+            <PointGraphics pixelSize={8} color={Color.WHITE} outlineColor={Color.CYAN} outlineWidth={2} />
+          </Entity>
+        ))}
+
+        {/* NEU: Globale Schiffe Layer */}
+        {layers.globalShips && shipsData.map((ship) => (
+          <Entity 
+            key={ship.id} 
+            position={Cartesian3.fromDegrees(ship.lng, ship.lat, 0)} 
+            name={`Vessel: ${ship.name}`}
+            description={`
+              <div style="color: white; font-family: sans-serif;">
+                <h3 style="margin-top:0; color: #00ffcc;">🚢 ${ship.name}</h3>
+                <p><strong>MMSI:</strong> ${ship.mmsi}</p>
+                <p><strong>Type:</strong> ${ship.type}</p>
+                <p><strong>Speed:</strong> ${ship.speed} knots</p>
+                <p><strong>Heading:</strong> ${Math.round(ship.heading)}°</p>
+                <hr style="border-color: #333;" />
+                <a href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${ship.mmsi}" target="_blank" rel="noopener noreferrer" style="color: #ffcc00; text-decoration: none; font-weight: bold;">
+                  🌊 Track on MarineTraffic
+                </a>
+              </div>
+            `}
+          >
+            <PointGraphics pixelSize={10} color={Color.AQUAMARINE} outlineColor={Color.DARKSLATEGRAY} outlineWidth={2} />
+          </Entity>
+        ))}
 
         {layers.liveEarthquakes && earthquakes.map((eq) => {
           const coords = eq.geometry.coordinates; const mag = eq.properties.mag;
