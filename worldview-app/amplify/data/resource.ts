@@ -2,16 +2,19 @@
 import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
 
 const schema = a.schema({
-  GeoEvent: a
-    .model({
-      type: a.string().required(), // z.B. 'FLIGHT', 'JAMMING', 'SATELLITE'
-      latitude: a.float().required(),
-      longitude: a.float().required(),
-      altitude: a.float(),
-      timestamp: a.datetime().required(),
-      metadata: a.json(), // Zusätzliche Infos wie Flugnummer, Schiff-ID
-    })
-    .authorization((allow) => [allow.publicApiKey()]),
+  Flight: a.model({
+    id: a.string().required(),
+    callsign: a.string(),
+    country: a.string(),
+    lng: a.float(),
+    lat: a.float(),
+    alt: a.float(),
+    velocity: a.float(),
+    heading: a.float(),
+    squawk: a.string()
+  }).authorization(allow => [
+    allow.publicApiKey().to(['read']), // Das Frontend darf nur lesen
+  ])
 });
 
 export type Schema = ClientSchema<typeof schema>;
