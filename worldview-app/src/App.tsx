@@ -32,12 +32,21 @@ const BOOKMARKS = [
 export default function App() {
   const viewerRef = useRef<any>(null);
   
+  // --- MOBILE RESPONSIVE STATE ---
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [isMenuOpen, setIsMenuOpen] = useState(!isMobile);
+
   // --- UI & LAYER STATE ---
   const [layers, setLayers] = useState({
     liveFlights: true,
     liveEarthquakes: true,
     digi4: true,
-    terrain3D: true, // Default auf true für bessere 3D UX
+    terrain3D: true,
+    issTracker: false,
+    wildfires: false,
+    volcanoes: false,
+    seaIce: false,
+    meteorites: false,
   });
   
   const [copiedCoords, setCopiedCoords] = useState<string | null>(null);
@@ -47,24 +56,42 @@ export default function App() {
   // --- LIVE DATA STATES ---
   const [earthquakes, setEarthquakes] = useState<any[]>([]);
   const [flights, setFlights] = useState<any[]>([]);
+  const [issData, setIssData] = useState<any>(null);
+  const [wildfiresData, setWildfiresData] = useState<any[]>([]);
+  const [volcanoesData, setVolcanoesData] = useState<any[]>([]);
+  const [seaIceData, setSeaIceData] = useState<any[]>([]);
+  const [meteoriteData, setMeteoriteData] = useState<any[]>([]);
+  
   const [lastSync, setLastSync] = useState<string>('Syncing...');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncRealTime, setSyncRealTime] = useState<boolean>(true);
 
-  // --- iFRAME SANDBOX FIX ---
+  // --- RESIZE LISTENER FÜR MOBILE ---
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (viewerRef.current?.cesiumElement) {
-        const viewer = viewerRef.current.cesiumElement;
-        if (viewer.infoBox && viewer.infoBox.frame) {
-          viewer.infoBox.frame.setAttribute(
-            'sandbox', 
-            'allow-same-origin allow-scripts allow-popups allow-forms'
-          );
+    const handleResize = () => {
+      const mobile = window.innerWidth <= 768;
+      setIsMobile(mobile);
+      if (!mobile) setIsMenuOpen(true);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // --- iFRAME SANDBOX FIX (AGGRESSIVE METHODE) ---
+  // Entfernt das sandbox-Attribut direkt aus dem DOM, da Cesium es sonst überschreibt.
+  useEffect(() => {
+    const fixInfoBoxSandbox = () => {
+      const iframes = document.querySelectorAll('.cesium-infoBox-iframe');
+      iframes.forEach((iframe) => {
+        if (iframe.hasAttribute('sandbox')) {
+          iframe.removeAttribute('sandbox'); // Sandbox komplett zerstören = alle Skripte erlaubt
         }
-      }
-    }, 1500);
-    return () => clearTimeout(timer);
+      });
+    };
+
+    // Wir prüfen jede halbe Sekunde, ob Cesium das iFrame neu generiert hat
+    const timer = setInterval(fixInfoBoxSandbox, 500);
+    return () => clearInterval(timer);
   }, []);
 
   // --- 3D TERRAIN TOGGLE LOGIK ---
@@ -82,6 +109,19 @@ export default function App() {
       }
     }
   }, [layers.terrain3D]);
+
+  // --- EINMALIGER FETCH (Statische/Historische OSINT Daten) ---
+  useEffect(() => {
+    if (layers.meteorites && meteoriteData.length === 0) {
+      fetch('https://data.nasa.gov/resource/gh4g-9sfh.json?$limit=100')
+        .then(res => res.json())
+        .then(data => {
+          const validData = data.filter((m: any) => m.reclat && m.reclong);
+          setMeteoriteData(validData);
+        })
+        .catch(e => console.error("Meteorite fetch failed", e));
+    }
+  }, [layers.meteorites]);
 
   // --- KOORDINATEN EXTRAKTOR ---
   const handleMapClick = (movement: any) => {
@@ -125,7 +165,6 @@ export default function App() {
         const flightRes = await fetch('https://opensky-network.org/api/states/all?lomin=5.0&lomax=11.0&lamin=45.0&lamax=48.0');
         if (flightRes.ok) {
           const flightData = await flightRes.json();
-          // UX OPT 1: true_track (f[10]) für Heading auslesen
           const parsedFlights = (flightData.states || []).filter((f: any) => f[5] && f[6]).map((f: any) => ({
             id: f[0], callsign: f[1]?.trim() || 'UNKNOWN', lng: f[5], lat: f[6], alt: f[7] || 10000, 
             velocity: f[9], heading: f[10] || 0 
@@ -135,9 +174,34 @@ export default function App() {
       } catch (e) { console.error("Flight fetch failed", e); }
     }
 
+    if (layers.issTracker) {
+      try {
+        const issRes = await fetch('https://api.wheretheiss.at/v1/satellites/25544');
+        const data = await issRes.json();
+        setIssData({ lat: data.latitude, lng: data.longitude, alt: data.altitude * 1000, velocity: data.velocity });
+      } catch (e) { console.error("ISS fetch failed", e); }
+    }
+
+    if (layers.wildfires || layers.volcanoes || layers.seaIce) {
+      try {
+        const eonetRes = await fetch('https://eonet.gsfc.nasa.gov/api/v3/events?status=open');
+        const eonetData = await eonetRes.json();
+        
+        if (layers.wildfires) {
+          setWildfiresData(eonetData.events.filter((e: any) => e.categories[0].id === 'wildfires'));
+        }
+        if (layers.volcanoes) {
+          setVolcanoesData(eonetData.events.filter((e: any) => e.categories[0].id === 'volcanoes'));
+        }
+        if (layers.seaIce) {
+          setSeaIceData(eonetData.events.filter((e: any) => e.categories[0].id === 'seaIce'));
+        }
+      } catch (e) { console.error("EONET fetch failed", e); }
+    }
+
     setLastSync(now);
-    setTimeout(() => setIsSyncing(false), 800); // Kurzer Delay für den visuellen Puls-Effekt
-  }, [layers.liveEarthquakes, layers.liveFlights]);
+    setTimeout(() => setIsSyncing(false), 800);
+  }, [layers]);
 
   useEffect(() => {
     fetchLiveData(); 
@@ -154,7 +218,6 @@ export default function App() {
   return (
     <div style={{ width: '100vw', height: '100vh', margin: 0, padding: 0, overflow: 'hidden', backgroundColor: '#000' }}>
       
-      {/* CSS für den Live-Puls Indikator */}
       <style>{`
         @keyframes pulse {
           0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.7); }
@@ -168,15 +231,41 @@ export default function App() {
         .pulse-dot.active { animation: pulse 1s infinite; background: #ff3333; }
         .glass-panel::-webkit-scrollbar { width: 6px; }
         .glass-panel::-webkit-scrollbar-thumb { background: rgba(0, 255, 204, 0.3); border-radius: 4px; }
+        
+        /* Mobile Hamburger Button */
+        .mobile-toggle {
+          position: absolute; bottom: 20px; right: 20px; z-index: 200;
+          background: rgba(10, 15, 20, 0.85); color: #00ffcc; border: 1px solid #00ffcc;
+          padding: 12px; border-radius: 50%; cursor: pointer;
+          backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+          display: none;
+        }
+        @media (max-width: 768px) {
+          .mobile-toggle { display: block; }
+        }
       `}</style>
 
-      {/* --- UX OPT 5: GLASSMORPHISM UI PANEL --- */}
+      {/* MOBILE TOGGLE BUTTON */}
+      <button className="mobile-toggle" onClick={() => setIsMenuOpen(!isMenuOpen)}>
+        {isMenuOpen ? '✖' : '☰'}
+      </button>
+
+      {/* --- GLASSMORPHISM UI PANEL (Responsive) --- */}
       <div className="glass-panel" style={{
-        position: 'absolute', top: 20, left: 20, zIndex: 100, width: '340px', maxHeight: '90vh', overflowY: 'auto',
-        background: 'rgba(10, 15, 20, 0.65)', color: '#00ffcc', padding: '25px', 
+        position: 'absolute', 
+        top: isMobile ? 'auto' : 20, 
+        bottom: isMobile ? (isMenuOpen ? 20 : '-100%') : 'auto',
+        left: isMobile ? '5%' : 20, 
+        zIndex: 100, 
+        width: isMobile ? '90%' : '340px', 
+        maxHeight: isMobile ? '70vh' : '90vh', 
+        overflowY: 'auto',
+        background: 'rgba(10, 15, 20, 0.75)', color: '#00ffcc', padding: '25px', 
         borderRadius: '16px', border: '1px solid rgba(0, 255, 204, 0.2)', fontFamily: 'monospace',
         backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', 
-        boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)'
+        boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)',
+        transition: 'bottom 0.3s ease-in-out',
+        boxSizing: 'border-box'
       }}>
         <h2 style={{ margin: '0 0 15px 0', fontSize: '1.3rem', textTransform: 'uppercase', letterSpacing: '2px', textShadow: '0 0 10px rgba(0,255,204,0.5)' }}>
           God's Eye OSINT
@@ -191,23 +280,23 @@ export default function App() {
             </span>
             <span style={{ fontSize: '0.75rem', color: '#888' }}>{lastSync}</span>
           </div>
-          <div style={{ fontSize: '0.85rem', marginTop: '8px', color: '#00ffcc' }}>
-            Tracking: <strong>{flights.length}</strong> Flights | <strong>{earthquakes.length}</strong> Quakes
+          <div style={{ fontSize: '0.85rem', marginTop: '8px', color: '#00ffcc', display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+            Tracking: <strong>{flights.length}</strong> FLT | <strong>{earthquakes.length}</strong> EQ | <strong>{wildfiresData.length}</strong> FIRE
           </div>
         </div>
 
         <div style={{ marginBottom: '20px' }}>
           <strong style={{ color: '#fff' }}>📡 Data Layers</strong>
-          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {Object.keys(layers).map(layer => (
-              <label key={layer} style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: '#ccc', fontSize: '0.9rem' }}>
+              <label key={layer} style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: '#ccc', fontSize: '0.9rem', padding: '4px 0' }}>
                 <input 
                   type="checkbox" 
                   checked={layers[layer as keyof typeof layers]} 
                   onChange={() => setLayers({...layers, [layer]: !layers[layer as keyof typeof layers]})}
-                  style={{ marginRight: '10px', accentColor: '#00ffcc' }}
+                  style={{ marginRight: '10px', accentColor: '#00ffcc', width: '16px', height: '16px' }}
                 />
-                {layer.toUpperCase().replace('LIVE', 'LIVE ')}
+                {layer.replace(/([A-Z])/g, ' $1').toUpperCase()}
               </label>
             ))}
           </div>
@@ -220,7 +309,7 @@ export default function App() {
               type="checkbox" 
               checked={syncRealTime} 
               onChange={() => setSyncRealTime(!syncRealTime)}
-              style={{ marginRight: '10px', accentColor: '#00ffcc' }}
+              style={{ marginRight: '10px', accentColor: '#00ffcc', width: '16px', height: '16px' }}
             />
             Sync Real-Time Shadows
           </label>
@@ -232,14 +321,12 @@ export default function App() {
             {BOOKMARKS.map((bm, idx) => (
               <button 
                 key={idx}
-                onClick={() => setActiveBookmark(bm)}
+                onClick={() => { setActiveBookmark(bm); if(isMobile) setIsMenuOpen(false); }}
                 style={{ 
                   background: 'rgba(0, 255, 204, 0.1)', color: '#00ffcc', border: '1px solid rgba(0,255,204,0.3)', 
-                  padding: '8px', cursor: 'pointer', borderRadius: '6px', transition: 'all 0.2s', textAlign: 'left',
+                  padding: '10px', cursor: 'pointer', borderRadius: '6px', transition: 'all 0.2s', textAlign: 'left',
                   fontSize: '0.85rem'
                 }}
-                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(0, 255, 204, 0.2)'}
-                onMouseOut={(e) => e.currentTarget.style.background = 'rgba(0, 255, 204, 0.1)'}
               >
                 ▶ {bm.name}
               </button>
@@ -250,8 +337,7 @@ export default function App() {
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '15px', fontSize: '0.75rem', color: '#888' }}>
           <p style={{ margin: '0 0 5px 0' }}>📍 <strong>UX Controls:</strong></p>
           <ul style={{ paddingLeft: '15px', margin: '0', lineHeight: '1.4' }}>
-            <li>Double-Click aircraft to track</li>
-            <li>Use Search bar (Top Right)</li>
+            <li>Double-Click / Tap aircraft to track</li>
             <li>Ctrl+Click to drop custom pin</li>
           </ul>
           {copiedCoords && <div style={{ color: '#00ffcc', marginTop: '10px', fontWeight: 'bold' }}>Copied: {copiedCoords}</div>}
@@ -283,7 +369,6 @@ export default function App() {
           />
         )}
         
-        {/* UX OPT 4: Kinoreife Lesezeichen mit Pitch und Heading (3D Anflug) */}
         {activeBookmark && (
           <CameraFlyTo 
             destination={Cartesian3.fromDegrees(activeBookmark.lng, activeBookmark.lat, activeBookmark.height)} 
@@ -306,7 +391,7 @@ export default function App() {
             description={`
               <div style="background: #111; padding: 10px; color: white; font-family: sans-serif;">
                 <h3 style="margin-top: 0; color: #00ffcc;">${loc.name} System</h3>
-                <a href="${loc.url}" target="_blank" style="color: #00ffcc; text-decoration: none; border-bottom: 1px solid #00ffcc;">Open in Fullscreen</a>
+                <a href="${loc.url}" target="_blank" rel="noopener noreferrer" style="color: #00ffcc; text-decoration: none; border-bottom: 1px solid #00ffcc;">Open in Fullscreen (New Tab)</a>
                 <br/><br/>
                 <iframe src="${loc.url}" width="100%" height="300px" style="border: 1px solid #333; border-radius: 8px;"></iframe>
               </div>
@@ -316,13 +401,11 @@ export default function App() {
           </Entity>
         ))}
 
-        {/* --- UX OPT 1: 3D FLIGHTS (OpenSky) --- */}
+        {/* --- 3D FLIGHTS (OpenSky) --- */}
         {layers.liveFlights && flights.map((flight) => {
           const position = Cartesian3.fromDegrees(flight.lng, flight.lat, flight.alt);
           const heading = CesiumMath.toRadians(flight.heading - 90);
-          const pitch = 0;
-          const roll = 0;
-          const hpr = new HeadingPitchRoll(heading, pitch, roll);
+          const hpr = new HeadingPitchRoll(heading, 0, 0);
           const orientation = Transforms.headingPitchRollQuaternion(position, hpr);
 
           return (
@@ -337,8 +420,6 @@ export default function App() {
                   <p><strong>Altitude:</strong> ${Math.round(flight.alt)} m</p>
                   <p><strong>Velocity:</strong> ${Math.round(flight.velocity * 3.6)} km/h</p>
                   <p><strong>Heading:</strong> ${Math.round(flight.heading)}°</p>
-                  <hr style="border: 0; border-top: 1px solid #333;"/>
-                  <p style="font-size: 0.8rem; color: #aaa;">Double-click aircraft on map to lock camera tracking.</p>
                 </div>
               `}
             >
@@ -351,7 +432,7 @@ export default function App() {
           );
         })}
 
-        {/* --- LIVE EARTHQUAKES (USGS) --- */}
+        {/* --- LIVE EARTHQUAKES --- */}
         {layers.liveEarthquakes && earthquakes.map((eq) => {
           const coords = eq.geometry.coordinates;
           const mag = eq.properties.mag;
@@ -362,12 +443,59 @@ export default function App() {
               name={`Earthquake: M ${mag}`}
               description={`<div style="color: white;"><h3>${eq.properties.title}</h3><p>Time: ${new Date(eq.properties.time).toLocaleString()}</p></div>`}
             >
-              <PointGraphics 
-                pixelSize={mag * 5} 
-                color={getEqColor(mag).withAlpha(0.6)} 
-                outlineColor={getEqColor(mag)} 
-                outlineWidth={2} 
-              />
+              <PointGraphics pixelSize={mag * 5} color={getEqColor(mag).withAlpha(0.6)} outlineColor={getEqColor(mag)} outlineWidth={2} />
+            </Entity>
+          );
+        })}
+
+        {/* --- NEU: ISS TRACKER --- */}
+        {layers.issTracker && issData && (
+          <Entity
+            name="International Space Station"
+            position={Cartesian3.fromDegrees(issData.lng, issData.lat, issData.alt)}
+            description={`<div style="color: white;"><h3>ISS Telemetry</h3><p>Altitude: ${(issData.alt / 1000).toFixed(2)} km</p><p>Velocity: ${issData.velocity.toFixed(2)} km/h</p></div>`}
+          >
+            <PointGraphics pixelSize={20} color={Color.CYAN} outlineColor={Color.WHITE} outlineWidth={3} />
+          </Entity>
+        )}
+
+        {/* --- NEU: NASA WILDFIRES --- */}
+        {layers.wildfires && wildfiresData.map((fire: any) => {
+          const coords = fire.geometry[0].coordinates;
+          return (
+            <Entity key={`fire-${fire.id}`} position={Cartesian3.fromDegrees(coords[0], coords[1], 0)} name={fire.title} description={`<div style="color: white;"><h3>${fire.title}</h3><p>Date: ${new Date(fire.geometry[0].date).toLocaleString()}</p></div>`}>
+              <PointGraphics pixelSize={12} color={Color.ORANGERED} outlineColor={Color.BLACK} outlineWidth={2} />
+            </Entity>
+          );
+        })}
+
+        {/* --- NEU: NASA VOLCANOES --- */}
+        {layers.volcanoes && volcanoesData.map((volcano: any) => {
+          const coords = volcano.geometry[0].coordinates;
+          return (
+            <Entity key={`volc-${volcano.id}`} position={Cartesian3.fromDegrees(coords[0], coords[1], 0)} name={volcano.title} description={`<div style="color: white;"><h3>${volcano.title}</h3><p>Date: ${new Date(volcano.geometry[0].date).toLocaleString()}</p></div>`}>
+              <PointGraphics pixelSize={14} color={Color.DARKRED} outlineColor={Color.YELLOW} outlineWidth={2} />
+            </Entity>
+          );
+        })}
+
+        {/* --- NEU: NASA SEA ICE / ICEBERGS --- */}
+        {layers.seaIce && seaIceData.map((ice: any) => {
+          const coords = ice.geometry[0].coordinates;
+          return (
+            <Entity key={`ice-${ice.id}`} position={Cartesian3.fromDegrees(coords[0], coords[1], 0)} name={ice.title} description={`<div style="color: white;"><h3>${ice.title}</h3><p>Date: ${new Date(ice.geometry[0].date).toLocaleString()}</p></div>`}>
+              <PointGraphics pixelSize={12} color={Color.LIGHTCYAN} outlineColor={Color.BLUE} outlineWidth={2} />
+            </Entity>
+          );
+        })}
+
+        {/* --- NEU: NASA METEORITES --- */}
+        {layers.meteorites && meteoriteData.map((met: any) => {
+          const mass = parseFloat(met.mass) || 1000;
+          const size = Math.min(Math.max(mass / 50000, 5), 25);
+          return (
+            <Entity key={`met-${met.id}`} position={Cartesian3.fromDegrees(parseFloat(met.reclong), parseFloat(met.reclat), 0)} name={`Meteorite: ${met.name}`} description={`<div style="color: white;"><h3>${met.name}</h3><p>Class: ${met.recclass}</p><p>Mass: ${mass}g</p><p>Year: ${met.year ? met.year.substring(0,4) : 'Unknown'}</p></div>`}>
+              <PointGraphics pixelSize={size} color={Color.SLATEGRAY} outlineColor={Color.BLACK} outlineWidth={1} />
             </Entity>
           );
         })}
