@@ -14,13 +14,6 @@ import {
   HeadingPitchRoll,
   Transforms
 } from 'cesium';
-import { generateClient } from 'aws-amplify/data';
-import type { Schema } from '../amplify/data/resource';
-import outputs from '../amplify_outputs.json';
-import { Amplify } from 'aws-amplify';
-
-Amplify.configure(outputs);
-const client = generateClient<Schema>();
 
 // --- 1. DEINE SPEZIFISCHEN LINKS (Region Bern) ---
 const DIGI4_LINKS = [
@@ -265,9 +258,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* --- CESIUM VIEWER --- 
-          UX OPT 3: geocoder={true} aktiviert die weltweite Suchleiste oben rechts!
-      */}
+      {/* --- CESIUM VIEWER --- */}
       <Viewer 
         ref={viewerRef}
         full 
@@ -328,8 +319,7 @@ export default function App() {
         {/* --- UX OPT 1: 3D FLIGHTS (OpenSky) --- */}
         {layers.liveFlights && flights.map((flight) => {
           const position = Cartesian3.fromDegrees(flight.lng, flight.lat, flight.alt);
-          // Berechnung der 3D-Rotation basierend auf OpenSky true_track
-          const heading = CesiumMath.toRadians(flight.heading - 90); // -90 Grad Anpassung für das Standard Cesium-Modell
+          const heading = CesiumMath.toRadians(flight.heading - 90);
           const pitch = 0;
           const roll = 0;
           const hpr = new HeadingPitchRoll(heading, pitch, roll);
@@ -352,7 +342,6 @@ export default function App() {
                 </div>
               `}
             >
-              {/* Das 3D Modell (Cesium liefert standardmäßig ein Flugzeug als Sample Data) */}
               <ModelGraphics 
                 uri="https://sandcastle.cesium.com/SampleData/models/CesiumAir/Cesium_Air.glb" 
                 minimumPixelSize={48} 
