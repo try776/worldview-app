@@ -36,9 +36,12 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [isMenuOpen, setIsMenuOpen] = useState(!isMobile);
   
-  // Custom Modal für Splat App
+  // Custom Modal für Splat App (iFrames)
   const [activeSplatUrl, setActiveSplatUrl] = useState<string | null>(null);
   const [activeSplatName, setActiveSplatName] = useState<string | null>(null);
+
+  // NEU: State für unser Custom Info Panel
+  const [selectedFeature, setSelectedFeature] = useState<{type: string, data: any} | null>(null);
 
   const [layers, setLayers] = useState({
     liveFlights: true,
@@ -86,21 +89,6 @@ export default function App() {
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // Fix für das Cesium InfoBox iFrame Sandbox Problem (erlaubt externe Links und Scripte)
-  useEffect(() => {
-    const fixInfoBox = () => {
-      if (viewerRef.current?.cesiumElement?.infoBox?.frame) {
-        viewerRef.current.cesiumElement.infoBox.frame.setAttribute(
-          'sandbox',
-          'allow-same-origin allow-popups allow-forms allow-scripts allow-popups-to-escape-sandbox allow-top-navigation'
-        );
-      } else {
-        setTimeout(fixInfoBox, 200); // Erneut versuchen, falls der Viewer noch nicht bereit ist
-      }
-    };
-    fixInfoBox();
   }, []);
 
   // Terrain Layer Toggle
@@ -158,23 +146,61 @@ export default function App() {
     }
   }, [layers.meteorites]);
 
-  // --- KLICK-LOGIK ---
+  // --- NEUE, SAUBERE KLICK-LOGIK ---
   const handleMapClick = (movement: any) => {
     if (!viewerRef.current?.cesiumElement) return;
     const viewer = viewerRef.current.cesiumElement;
     
     const pickedObject = viewer.scene.pick(movement.position);
-    if (pickedObject && pickedObject.id && typeof pickedObject.id.name === 'string' && pickedObject.id.name.startsWith('Digi4 Cam:')) {
-      const camName = pickedObject.id.name.replace('Digi4 Cam: ', '');
-      const link = DIGI4_LINKS.find(l => l.name === camName);
-      if (link) {
-        setActiveSplatUrl(link.url);
-        setActiveSplatName(camName);
-        setTimeout(() => { viewer.selectedEntity = undefined; }, 10);
+    
+    // Verhindert das grüne Standard-Cesium-Auswahlviereck
+    setTimeout(() => { viewer.selectedEntity = undefined; }, 10);
+
+    if (pickedObject && pickedObject.id) {
+      const entityId = pickedObject.id.id;
+      const entityName = pickedObject.id.name;
+
+      // 1. Splat Cams (Öffnen im eigenen Iframe-Fenster)
+      if (typeof entityName === 'string' && entityName.startsWith('Digi4 Cam:')) {
+        const camName = entityName.replace('Digi4 Cam: ', '');
+        const link = DIGI4_LINKS.find(l => l.name === camName);
+        if (link) {
+          setActiveSplatUrl(link.url);
+          setActiveSplatName(camName);
+          setSelectedFeature(null); // Custom Panel schließen
+        }
         return; 
+      }
+
+      // 2. Custom Info Panels für Flüge, Schiffe, Erdbeben etc.
+      if (typeof entityId === 'string') {
+        if (entityId.startsWith('flight-')) {
+          const flight = flights.find(f => `flight-${f.id}` === entityId);
+          if (flight) setSelectedFeature({ type: 'flight', data: flight });
+          return;
+        }
+        if (entityId.startsWith('ship-')) {
+          const ship = shipsData.find(s => s.id === entityId);
+          if (ship) setSelectedFeature({ type: 'ship', data: ship });
+          return;
+        }
+        if (entityId.startsWith('sat-')) {
+          const sat = satellitesData.find(s => s.id === entityId);
+          if (sat) setSelectedFeature({ type: 'sat', data: sat });
+          return;
+        }
+        if (entityId.startsWith('eq-')) {
+          const eq = earthquakes.find(e => `eq-${e.id}` === entityId);
+          if (eq) setSelectedFeature({ type: 'eq', data: eq });
+          return;
+        }
       }
     }
 
+    // Wenn ins Leere oder auf den Globus geklickt wurde, Panel schließen
+    setSelectedFeature(null);
+
+    // 3. Koordinaten kopieren & Pins setzen (nur wenn auf Globus geklickt)
     const cartesian = viewer.camera.pickEllipsoid(movement.position, viewer.scene.globe.ellipsoid);
     if (cartesian) {
       import('cesium').then(({ Cartographic, Math: CesiumMath }) => {
@@ -238,7 +264,7 @@ export default function App() {
         type: types[Math.floor(Math.random()*types.length)],
         lat: (Math.random() - 0.5) * 170,
         lng: (Math.random() - 0.5) * 360,
-        alt: 400000 + Math.random() * 1200000 // LEO Orbit 400km - 1600km
+        alt: 400000 + Math.random() * 1200000 
       });
     }
     return sats;
@@ -378,6 +404,7 @@ export default function App() {
         }
       `}</style>
 
+      {/* --- SPLAT iFRAME MODAL --- */}
       {activeSplatUrl && (
         <div style={{
           position: 'absolute', top: isMobile ? '5%' : '10%', left: isMobile ? '5%' : '15%', 
@@ -401,6 +428,69 @@ export default function App() {
               allow="autoplay; fullscreen; xr-spatial-tracking" 
             />
           </div>
+        </div>
+      )}
+
+      {/* --- NEU: CUSTOM DATA PANEL STATT CESIUM INFOBOX --- */}
+      {selectedFeature && (
+        <div style={{
+          position: 'absolute', 
+          top: isMobile ? 'auto' : '20px', 
+          bottom: isMobile ? '90px' : 'auto', // Auf Mobile über dem runden Button
+          right: isMobile ? '5%' : '20px', 
+          width: isMobile ? '90%' : '340px', 
+          zIndex: 150,
+          background: 'rgba(10, 15, 20, 0.95)', border: '1px solid #00ffcc', 
+          borderRadius: '12px', padding: '20px', color: '#fff', fontFamily: 'monospace',
+          boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.8)', backdropFilter: 'blur(16px)', boxSizing: 'border-box'
+        }}>
+          <button onClick={() => setSelectedFeature(null)} style={{ float: 'right', background: 'rgba(255, 51, 51, 0.2)', color: '#ff3333', border: '1px solid #ff3333', borderRadius: '4px', cursor: 'pointer', padding: '2px 8px', fontWeight: 'bold' }}>X</button>
+
+          {selectedFeature.type === 'flight' && (
+            <div>
+              <h3 style={{ margin: '0 0 15px 0', color: '#00ffcc', fontSize: '1.3rem' }}>✈️ {selectedFeature.data.callsign}</h3>
+              <p style={{ margin: '8px 0', borderBottom: '1px solid #222', paddingBottom: '5px' }}><strong>Origin:</strong> {selectedFeature.data.country}</p>
+              <p style={{ margin: '8px 0', borderBottom: '1px solid #222', paddingBottom: '5px' }}><strong>Altitude:</strong> {Math.round(selectedFeature.data.alt)} m</p>
+              <p style={{ margin: '8px 0', borderBottom: '1px solid #222', paddingBottom: '5px' }}><strong>Velocity:</strong> {Math.round(selectedFeature.data.velocity * 3.6)} km/h</p>
+              <p style={{ margin: '8px 0' }}><strong>Squawk:</strong> {selectedFeature.data.squawk}</p>
+              <a href={`https://www.flightradar24.com/${selectedFeature.data.callsign !== 'UNKNOWN' ? selectedFeature.data.callsign : ''}`} target="_blank" rel="noopener noreferrer" style={{ display: 'block', background: 'rgba(255, 204, 0, 0.15)', border: '1px solid #ffcc00', color: '#ffcc00', padding: '12px', textAlign: 'center', borderRadius: '6px', textDecoration: 'none', fontWeight: 'bold', marginTop: '20px', transition: 'all 0.2s' }}>
+                📡 Open FlightRadar24
+              </a>
+            </div>
+          )}
+
+          {selectedFeature.type === 'ship' && (
+            <div>
+              <h3 style={{ margin: '0 0 15px 0', color: '#00ffcc', fontSize: '1.3rem' }}>🚢 {selectedFeature.data.name}</h3>
+              <p style={{ margin: '8px 0', borderBottom: '1px solid #222', paddingBottom: '5px' }}><strong>MMSI:</strong> {selectedFeature.data.mmsi}</p>
+              <p style={{ margin: '8px 0', borderBottom: '1px solid #222', paddingBottom: '5px' }}><strong>Type:</strong> {selectedFeature.data.type}</p>
+              <p style={{ margin: '8px 0', borderBottom: '1px solid #222', paddingBottom: '5px' }}><strong>Speed:</strong> {selectedFeature.data.speed} knots</p>
+              <p style={{ margin: '8px 0' }}><strong>Heading:</strong> {Math.round(selectedFeature.data.heading)}°</p>
+              <a href={`https://www.marinetraffic.com/en/ais/details/ships/mmsi:${selectedFeature.data.mmsi}`} target="_blank" rel="noopener noreferrer" style={{ display: 'block', background: 'rgba(0, 255, 204, 0.15)', border: '1px solid #00ffcc', color: '#00ffcc', padding: '12px', textAlign: 'center', borderRadius: '6px', textDecoration: 'none', fontWeight: 'bold', marginTop: '20px' }}>
+                🌊 Open MarineTraffic
+              </a>
+            </div>
+          )}
+
+          {selectedFeature.type === 'sat' && (
+            <div>
+              <h3 style={{ margin: '0 0 15px 0', color: '#00ffcc', fontSize: '1.3rem' }}>🛰️ {selectedFeature.data.name}</h3>
+              <p style={{ margin: '8px 0', borderBottom: '1px solid #222', paddingBottom: '5px' }}><strong>Origin:</strong> {selectedFeature.data.country}</p>
+              <p style={{ margin: '8px 0', borderBottom: '1px solid #222', paddingBottom: '5px' }}><strong>Type:</strong> {selectedFeature.data.type}</p>
+              <p style={{ margin: '8px 0' }}><strong>Altitude:</strong> {Math.round(selectedFeature.data.alt / 1000)} km</p>
+            </div>
+          )}
+
+          {selectedFeature.type === 'eq' && (
+            <div>
+              <h3 style={{ margin: '0 0 15px 0', color: '#ff3333', fontSize: '1.3rem' }}>🌋 Earthquake</h3>
+              <p style={{ margin: '8px 0', lineHeight: '1.4', borderBottom: '1px solid #222', paddingBottom: '5px' }}>{selectedFeature.data.properties.title}</p>
+              <p style={{ margin: '8px 0' }}><strong>Magnitude:</strong> {selectedFeature.data.properties.mag}</p>
+              <a href={selectedFeature.data.properties.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', background: 'rgba(255, 51, 51, 0.15)', border: '1px solid #ff3333', color: '#ff3333', padding: '12px', textAlign: 'center', borderRadius: '6px', textDecoration: 'none', fontWeight: 'bold', marginTop: '20px' }}>
+                🚨 View USGS Details
+              </a>
+            </div>
+          )}
         </div>
       )}
 
@@ -478,7 +568,7 @@ export default function App() {
             )}
           </div>
           <ul style={{ paddingLeft: '15px', margin: '0', lineHeight: '1.4' }}>
-            <li>Click points for Info/Splat</li>
+            <li>Click points for Info Panel</li>
             <li>Double-Click aircraft to track</li>
             <li>Ctrl+Click (Desktop) to drop pin</li>
           </ul>
@@ -491,7 +581,7 @@ export default function App() {
         full 
         timeline={!isMobile} 
         animation={!isMobile} 
-        infoBox={true} 
+        infoBox={false} // INFOBOX DEAKTIVIERT!
         shadows={globeLighting} 
         geocoder={true} 
         homeButton={true} 
@@ -508,16 +598,10 @@ export default function App() {
           <CameraFlyTo destination={Cartesian3.fromDegrees(activeBookmark.lng, activeBookmark.lat, activeBookmark.height)} orientation={{ heading: CesiumMath.toRadians(activeBookmark.heading), pitch: CesiumMath.toRadians(activeBookmark.pitch), roll: 0.0 }} duration={3} onComplete={() => setActiveBookmark(null)} />
         )}
 
+        {/* --- ENTITIES (Ohne alte Description/InfoBox HTML) --- */}
         {layers.digi4 && DIGI4_LINKS.map((loc, idx) => (
           <Entity 
             key={`digi4-${idx}`} name={`Digi4 Cam: ${loc.name}`} position={Cartesian3.fromDegrees(loc.lng, loc.lat, 0)}
-            description={`
-              <div style="background: #111; padding: 10px; color: white; font-family: sans-serif;">
-                <h3 style="margin-top: 0; color: #00ffcc;">${loc.name} System</h3>
-                <p>Click the point directly on the map to open the Live Splat Stream as an overlay.</p>
-                <a href="${loc.url}" target="_blank" rel="noopener noreferrer" style="color: #00ffcc; text-decoration: none; border-bottom: 1px solid #00ffcc;">Open in New Tab</a>
-              </div>
-            `}
           >
             <PointGraphics pixelSize={18} color={Color.LIME} outlineColor={Color.BLACK} outlineWidth={3} />
           </Entity>
@@ -529,23 +613,11 @@ export default function App() {
           const orientation = Transforms.headingPitchRollQuaternion(position, new HeadingPitchRoll(heading, 0, 0));
           return (
             <Entity 
+              id={`flight-${flight.id}`}
               key={`flight-${flight.id}`} 
               position={position} 
               orientation={orientation} 
               name={`Flight: ${flight.callsign}`} 
-              description={`
-                <div style="color: white; font-family: sans-serif;">
-                  <h3 style="margin-top:0; color: #00ffcc;">✈️ ${flight.callsign}</h3>
-                  <p><strong>Country of Origin:</strong> ${flight.country}</p>
-                  <p><strong>Altitude:</strong> ${Math.round(flight.alt)} m</p>
-                  <p><strong>Velocity:</strong> ${Math.round(flight.velocity * 3.6)} km/h</p>
-                  <p><strong>Squawk:</strong> ${flight.squawk}</p>
-                  <hr style="border-color: #333;" />
-                  <a href="https://www.flightradar24.com/${flight.callsign !== 'UNKNOWN' ? flight.callsign : ''}" target="_blank" rel="noopener noreferrer" style="color: #ffcc00; text-decoration: none; font-weight: bold;">
-                    📡 Track on FlightRadar24
-                  </a>
-                </div>
-              `}
             >
               <ModelGraphics uri="/Cesium_Air.glb" minimumPixelSize={48} maximumScale={20000} />
             </Entity>
@@ -554,17 +626,10 @@ export default function App() {
 
         {layers.satellites && satellitesData.map((sat) => (
           <Entity 
+            id={sat.id}
             key={sat.id} 
             position={Cartesian3.fromDegrees(sat.lng, sat.lat, sat.alt)} 
             name={`Satellite: ${sat.name}`}
-            description={`
-              <div style="color: white; font-family: sans-serif;">
-                <h3 style="margin-top:0; color: #00ffcc;">🛰️ ${sat.name}</h3>
-                <p><strong>Origin Country:</strong> ${sat.country}</p>
-                <p><strong>Type:</strong> ${sat.type}</p>
-                <p><strong>Altitude:</strong> ${Math.round(sat.alt / 1000)} km (LEO)</p>
-              </div>
-            `}
           >
             <PointGraphics pixelSize={8} color={Color.WHITE} outlineColor={Color.CYAN} outlineWidth={2} />
           </Entity>
@@ -572,22 +637,10 @@ export default function App() {
 
         {layers.globalShips && shipsData.map((ship) => (
           <Entity 
+            id={ship.id}
             key={ship.id} 
             position={Cartesian3.fromDegrees(ship.lng, ship.lat, 0)} 
             name={`Vessel: ${ship.name}`}
-            description={`
-              <div style="color: white; font-family: sans-serif;">
-                <h3 style="margin-top:0; color: #00ffcc;">🚢 ${ship.name}</h3>
-                <p><strong>MMSI:</strong> ${ship.mmsi}</p>
-                <p><strong>Type:</strong> ${ship.type}</p>
-                <p><strong>Speed:</strong> ${ship.speed} knots</p>
-                <p><strong>Heading:</strong> ${Math.round(ship.heading)}°</p>
-                <hr style="border-color: #333;" />
-                <a href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${ship.mmsi}" target="_blank" rel="noopener noreferrer" style="color: #ffcc00; text-decoration: none; font-weight: bold;">
-                  🌊 Track on MarineTraffic
-                </a>
-              </div>
-            `}
           >
             <PointGraphics pixelSize={10} color={Color.AQUAMARINE} outlineColor={Color.DARKSLATEGRAY} outlineWidth={2} />
           </Entity>
@@ -596,7 +649,12 @@ export default function App() {
         {layers.liveEarthquakes && earthquakes.map((eq) => {
           const coords = eq.geometry.coordinates; const mag = eq.properties.mag;
           return (
-            <Entity key={`eq-${eq.id}`} position={Cartesian3.fromDegrees(coords[0], coords[1], 0)} name={`Earthquake: M ${mag}`} description={`<div style="color: white;"><h3>${eq.properties.title}</h3></div>`}>
+            <Entity 
+              id={`eq-${eq.id}`}
+              key={`eq-${eq.id}`} 
+              position={Cartesian3.fromDegrees(coords[0], coords[1], 0)} 
+              name={`Earthquake: M ${mag}`} 
+            >
               <PointGraphics pixelSize={mag * 5} color={getEqColor(mag).withAlpha(0.6)} outlineColor={getEqColor(mag)} outlineWidth={2} />
             </Entity>
           );
