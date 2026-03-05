@@ -45,11 +45,11 @@ export default function App() {
     liveEarthquakes: true,
     digi4: true,
     terrain3D: true,
-    osmBuildings: false, // NEU: 3D Gebäude
+    osmBuildings: false, 
     issTracker: false,
     wildfires: false,
     volcanoes: false,
-    severeStorms: false, // NEU: Stürme
+    severeStorms: false, 
     seaIce: false,
     meteorites: false,
   });
@@ -71,7 +71,7 @@ export default function App() {
   const [lastSync, setLastSync] = useState<string>('Syncing...');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncRealTime, setSyncRealTime] = useState<boolean>(true);
-  const [globeLighting, setGlobeLighting] = useState<boolean>(false); // NEU: Tag/Nacht Zyklus
+  const [globeLighting, setGlobeLighting] = useState<boolean>(false); 
 
   useEffect(() => {
     const handleResize = () => {
@@ -99,7 +99,7 @@ export default function App() {
     }
   }, [layers.terrain3D]);
 
-  // NEU: OSM Buildings Layer Toggle
+  // OSM Buildings Layer Toggle
   useEffect(() => {
     if (!viewerRef.current?.cesiumElement) return;
     const viewer = viewerRef.current.cesiumElement;
@@ -119,7 +119,7 @@ export default function App() {
     };
   }, [layers.osmBuildings]);
 
-  // NEU: Globe Lighting Toggle
+  // Globe Lighting Toggle
   useEffect(() => {
     if (viewerRef.current?.cesiumElement) {
       viewerRef.current.cesiumElement.scene.globe.enableLighting = globeLighting;
@@ -174,7 +174,6 @@ export default function App() {
     }
   };
 
-  // NEU: Pin in der Bildschirmmitte droppen (für Mobile)
   const dropPinAtCenter = () => {
     if (!viewerRef.current?.cesiumElement) return;
     const viewer = viewerRef.current.cesiumElement;
@@ -192,7 +191,6 @@ export default function App() {
     }
   };
 
-  // NEU: GPS Standort finden
   const locateMe = () => {
     if (navigator.geolocation && viewerRef.current?.cesiumElement) {
       navigator.geolocation.getCurrentPosition((pos) => {
@@ -288,7 +286,6 @@ export default function App() {
           font-family: monospace; font-weight: bold; box-shadow: 0 4px 15px rgba(0,255,204,0.3);
         }
         
-        /* Mobile Specific Layout */
         @media (max-width: 768px) { 
           .mobile-toggle { display: block; } 
           .glass-panel {
@@ -307,7 +304,6 @@ export default function App() {
         }
       `}</style>
 
-      {/* --- SPLAT VIEWER MODAL --- */}
       {activeSplatUrl && (
         <div style={{
           position: 'absolute', top: isMobile ? '5%' : '10%', left: isMobile ? '5%' : '15%', 
@@ -334,18 +330,15 @@ export default function App() {
         </div>
       )}
 
-      {/* FAB (Floating Action Button) für Mobile Menü */}
       <button className="mobile-toggle" onClick={() => setIsMenuOpen(!isMenuOpen)}>
         {isMenuOpen ? 'CLOSE DATA PANNEL ▼' : 'OPEN DATA PANNEL ▲'}
       </button>
 
-      {/* --- GLASSMORPHISM UI PANEL --- */}
       <div className="glass-panel" style={{
         position: 'absolute', top: 20, left: 20, zIndex: 100, width: '340px', maxHeight: '90vh', overflowY: 'auto',
         background: 'rgba(10, 15, 20, 0.85)', color: '#00ffcc', padding: '25px', borderRadius: '16px', border: '1px solid rgba(0, 255, 204, 0.2)', 
         fontFamily: 'monospace', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)', boxSizing: 'border-box'
       }}>
-        {/* Mobile Drag Handle Indicator */}
         {isMobile && <div style={{width: '40px', height: '4px', background: 'rgba(255,255,255,0.3)', borderRadius: '2px', margin: '0 auto 15px auto'}} />}
 
         <h2 style={{ margin: '0 0 15px 0', fontSize: '1.3rem', textTransform: 'uppercase', letterSpacing: '2px', textShadow: '0 0 10px rgba(0,255,204,0.5)' }}>God's Eye OSINT</h2>
@@ -359,7 +352,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* NEU: Schnelle Aktionen (Mobile Friendly) */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '20px' }}>
           <button onClick={locateMe} style={{ background: 'rgba(0, 150, 255, 0.2)', color: '#4da6ff', border: '1px solid #4da6ff', padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>
             🎯 Locate Me
@@ -420,8 +412,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* --- CESIUM VIEWER --- */}
-      {/* Auf Mobile werden Timeline & Animation ausgeblendet, um Screen-Platz zu sparen */}
       <Viewer 
         ref={viewerRef} 
         full 
@@ -444,7 +434,6 @@ export default function App() {
           <CameraFlyTo destination={Cartesian3.fromDegrees(activeBookmark.lng, activeBookmark.lat, activeBookmark.height)} orientation={{ heading: CesiumMath.toRadians(activeBookmark.heading), pitch: CesiumMath.toRadians(activeBookmark.pitch), roll: 0.0 }} duration={3} onComplete={() => setActiveBookmark(null)} />
         )}
 
-        {/* --- DIGI4 LINKS --- */}
         {layers.digi4 && DIGI4_LINKS.map((loc, idx) => (
           <Entity 
             key={`digi4-${idx}`} name={`Digi4 Cam: ${loc.name}`} position={Cartesian3.fromDegrees(loc.lng, loc.lat, 0)}
@@ -466,7 +455,8 @@ export default function App() {
           const orientation = Transforms.headingPitchRollQuaternion(position, new HeadingPitchRoll(heading, 0, 0));
           return (
             <Entity key={`flight-${flight.id}`} position={position} orientation={orientation} name={`Flight: ${flight.callsign}`} description={`<div style="color: white; font-family: sans-serif;"><h3 style="margin-top:0; color: #00ffcc;">${flight.callsign}</h3><p><strong>Altitude:</strong> ${Math.round(flight.alt)} m</p><p><strong>Velocity:</strong> ${Math.round(flight.velocity * 3.6)} km/h</p></div>`}>
-              <ModelGraphics uri="https://sandcastle.cesium.com/SampleData/models/CesiumAir/Cesium_Air.glb" minimumPixelSize={48} maximumScale={20000} />
+              {/* Hier ist der aktualisierte lokale Pfad: */}
+              <ModelGraphics uri="/Cesium_Air.glb" minimumPixelSize={48} maximumScale={20000} />
             </Entity>
           );
         })}
@@ -498,7 +488,6 @@ export default function App() {
           </Entity>
         ))}
 
-        {/* NEU: Severe Storms Layer */}
         {layers.severeStorms && stormsData.map((storm: any) => (
           <Entity key={`storm-${storm.id}`} position={Cartesian3.fromDegrees(storm.geometry[0].coordinates[0], storm.geometry[0].coordinates[1], 0)} name={storm.title}>
             <PointGraphics pixelSize={16} color={Color.BLUEVIOLET} outlineColor={Color.WHITE} outlineWidth={2} />
