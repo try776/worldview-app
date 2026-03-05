@@ -16,11 +16,11 @@ import {
   Transforms
 } from 'cesium';
 
-// --- 1. DEINE SPEZIFISCHEN LINKS (Region Bern) ---
+// --- 1. DEINE SPEZIFISCHEN LINKS (Region Bern) --- , , , 
 const DIGI4_LINKS = [
-  { name: 'Neuenegg', lat: 46.898, lng: 7.298, url: 'https://neuenegg.digi4.click/' },
-  { name: 'Bramberg', lat: 46.887, lng: 7.318, url: 'https://bramberg.digi4.click/' },
-  { name: 'Grauholz', lat: 47.008, lng: 7.491, url: 'https://grauholz.digi4.click/' },
+  { name: 'Neuenegg', lat: 46.89717, lng: 7.30725, url: 'https://neuenegg.digi4.click/' },
+  { name: 'Bramberg', lat: 46.91195, lng: 7.28276, url: 'https://bramberg.digi4.click/' },
+  { name: 'Grauholz', lat: 47.01004, lng: 7.49563, url: 'https://grauholz.digi4.click/' },
 ];
 
 const BOOKMARKS = [
