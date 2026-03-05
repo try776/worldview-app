@@ -16,12 +16,10 @@ import {
   Transforms
 } from 'cesium';
 
-// --- NEU: Amplify Gen 2 Data Client ---
 import { generateClient } from 'aws-amplify/data';
 import type { Schema } from '../amplify/data/resource';
 
 const client = generateClient<Schema>();
-// --------------------------------------
 
 // --- 1. DEINE SPEZIFISCHEN LINKS (Region Bern) --- 
 const DIGI4_LINKS = [
@@ -44,7 +42,7 @@ export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(!isMobile);
   
   // RAM Optimierung: Maximal sichtbare Entitäten pro Layer
-  const [maxEntities, setMaxEntities] = useState<number>(200);
+  const [maxEntities] = useState<number>(200);
   
   // Custom Modal für Splat App (iFrames)
   const [activeSplatUrl, setActiveSplatUrl] = useState<string | null>(null);
@@ -303,7 +301,7 @@ export default function App() {
       } catch (e) {}
     }
 
-    // --- NEU: FLUGDATEN VIA AMPLIFY (AWS DYNAMODB) ---
+    // --- FLUGDATEN VIA AMPLIFY (AWS DYNAMODB) ---
     if (layers.liveFlights) {
       try {
         const { data: dbFlights, errors } = await client.models.Flight.list({
@@ -364,7 +362,7 @@ export default function App() {
 
   useEffect(() => {
     fetchLiveData(); 
-    const interval = setInterval(fetchLiveData, 15000); // Zurück auf 15s gesetzt (du hast ja jetzt kein Rate-Limit mehr!)
+    const interval = setInterval(fetchLiveData, 15000); 
     return () => clearInterval(interval);
   }, [fetchLiveData]);
 
