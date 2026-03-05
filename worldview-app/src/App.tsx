@@ -16,6 +16,13 @@ import {
   Transforms
 } from 'cesium';
 
+// --- NEU: Amplify Gen 2 Data Client ---
+import { generateClient } from 'aws-amplify/data';
+import type { Schema } from '../amplify/data/resource';
+
+const client = generateClient<Schema>();
+// --------------------------------------
+
 // --- 1. DEINE SPEZIFISCHEN LINKS (Region Bern) --- 
 const DIGI4_LINKS = [
   { name: 'Neuenegg', lat: 46.89717, lng: 7.30725, url: 'https://neuenegg.digi4.click/' },
@@ -292,36 +299,38 @@ export default function App() {
       try {
         const eqRes = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson');
         const eqData = await eqRes.json();
-        // Limit earthquakes to save RAM
         setEarthquakes((eqData.features || []).slice(0, maxEntities));
       } catch (e) {}
     }
 
+    // --- NEU: FLUGDATEN VIA AMPLIFY (AWS DYNAMODB) ---
     if (layers.liveFlights) {
       try {
-        const flightRes = await fetch('https://opensky-network.org/api/states/all');
-        if (flightRes.ok) {
-          const flightData = await flightRes.json();
-          const parsedFlights = (flightData.states || [])
-            .filter((f: any) => f[5] && f[6])
-            .map((f: any) => ({
-              id: f[0], 
-              callsign: f[1]?.trim() || 'UNKNOWN', 
-              country: f[2] || 'Unknown', 
-              lng: f[5], 
-              lat: f[6], 
-              alt: f[7] || 10000, 
-              velocity: f[9], 
-              heading: f[10] || 0,
-              squawk: f[14] || 'N/A'
-            }))
-            .slice(0, maxEntities); // RAM Optimierung: Limit auf maxEntities
+        const { data: dbFlights, errors } = await client.models.Flight.list({
+          limit: maxEntities
+        });
+        
+        if (!errors && dbFlights) {
+          const parsedFlights = dbFlights
+            .filter(f => f.lat !== null && f.lng !== null)
+            .map(f => ({
+              id: f.id,
+              callsign: f.callsign || 'UNKNOWN',
+              country: f.country || 'Unknown',
+              lng: f.lng,
+              lat: f.lat,
+              alt: f.alt || 10000,
+              velocity: f.velocity || 0,
+              heading: f.heading || 0,
+              squawk: f.squawk || 'N/A'
+            }));
           setFlights(parsedFlights);
         }
       } catch (e) {
-        console.warn("OpenSky Rate Limit erreicht.");
+        console.warn("Amplify DB Fetch Error:", e);
       }
     }
+    // ------------------------------------------------
 
     if (layers.issTracker) {
       try {
@@ -355,8 +364,7 @@ export default function App() {
 
   useEffect(() => {
     fetchLiveData(); 
-    // Polling-Intervall etwas entspannt, um Limits hinauszuzögern, bis AWS Backend steht
-    const interval = setInterval(fetchLiveData, 30000); 
+    const interval = setInterval(fetchLiveData, 15000); // Zurück auf 15s gesetzt (du hast ja jetzt kein Rate-Limit mehr!)
     return () => clearInterval(interval);
   }, [fetchLiveData]);
 
