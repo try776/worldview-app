@@ -25,7 +25,7 @@ const DIGI4_LINKS = [
 
 const BOOKMARKS = [
   { name: 'Operation Epic Fury', lat: 35.6892, lng: 51.3890, height: 150000, pitch: -45, heading: 20 },
-  { name: 'Bern HQ (Digi4)', lat: 46.948, lng: 7.447, height: 8000, pitch: -35, heading: 0 },
+  { name: 'Bern', lat: 46.948, lng: 7.447, height: 8000, pitch: -35, heading: 0 },
   { name: 'Strait of Hormuz', lat: 26.5667, lng: 56.2500, height: 200000, pitch: -50, heading: 45 },
 ];
 
