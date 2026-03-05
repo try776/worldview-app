@@ -36,11 +36,14 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [isMenuOpen, setIsMenuOpen] = useState(!isMobile);
   
+  // RAM Optimierung: Maximal sichtbare Entitäten pro Layer
+  const [maxEntities, setMaxEntities] = useState<number>(200);
+  
   // Custom Modal für Splat App (iFrames)
   const [activeSplatUrl, setActiveSplatUrl] = useState<string | null>(null);
   const [activeSplatName, setActiveSplatName] = useState<string | null>(null);
 
-  // NEU: State für unser Custom Info Panel
+  // Custom Info Panel
   const [selectedFeature, setSelectedFeature] = useState<{type: string, data: any} | null>(null);
 
   const [layers, setLayers] = useState({
@@ -136,7 +139,7 @@ export default function App() {
 
   useEffect(() => {
     if (layers.meteorites && meteoriteData.length === 0) {
-      fetch('https://data.nasa.gov/resource/gh4g-9sfh.json?$limit=100')
+      fetch(`https://data.nasa.gov/resource/gh4g-9sfh.json?$limit=${maxEntities}`)
         .then(res => res.json())
         .then(data => {
           const validData = data.filter((m: any) => m.reclat && m.reclong);
@@ -144,35 +147,31 @@ export default function App() {
         })
         .catch(e => console.error("Meteorite fetch failed", e));
     }
-  }, [layers.meteorites]);
+  }, [layers.meteorites, maxEntities, meteoriteData.length]);
 
-  // --- NEUE, SAUBERE KLICK-LOGIK ---
   const handleMapClick = (movement: any) => {
     if (!viewerRef.current?.cesiumElement) return;
     const viewer = viewerRef.current.cesiumElement;
     
     const pickedObject = viewer.scene.pick(movement.position);
     
-    // Verhindert das grüne Standard-Cesium-Auswahlviereck
     setTimeout(() => { viewer.selectedEntity = undefined; }, 10);
 
     if (pickedObject && pickedObject.id) {
       const entityId = pickedObject.id.id;
       const entityName = pickedObject.id.name;
 
-      // 1. Splat Cams (Öffnen im eigenen Iframe-Fenster)
       if (typeof entityName === 'string' && entityName.startsWith('Digi4 Cam:')) {
         const camName = entityName.replace('Digi4 Cam: ', '');
         const link = DIGI4_LINKS.find(l => l.name === camName);
         if (link) {
           setActiveSplatUrl(link.url);
           setActiveSplatName(camName);
-          setSelectedFeature(null); // Custom Panel schließen
+          setSelectedFeature(null); 
         }
         return; 
       }
 
-      // 2. Custom Info Panels für Flüge, Schiffe, Erdbeben etc.
       if (typeof entityId === 'string') {
         if (entityId.startsWith('flight-')) {
           const flight = flights.find(f => `flight-${f.id}` === entityId);
@@ -197,10 +196,8 @@ export default function App() {
       }
     }
 
-    // Wenn ins Leere oder auf den Globus geklickt wurde, Panel schließen
     setSelectedFeature(null);
 
-    // 3. Koordinaten kopieren & Pins setzen (nur wenn auf Globus geklickt)
     const cartesian = viewer.camera.pickEllipsoid(movement.position, viewer.scene.globe.ellipsoid);
     if (cartesian) {
       import('cesium').then(({ Cartographic, Math: CesiumMath }) => {
@@ -251,12 +248,11 @@ export default function App() {
     }
   };
 
-  // --- HILFSFUNKTIONEN FÜR SIMULIERTE GLOBALE DATEN (Schiffe & Satelliten) ---
-  const generateSimulatedSatellites = () => {
+  const generateSimulatedSatellites = (limit: number) => {
     const sats = [];
     const countries = ['USA', 'China', 'Russia', 'ESA (Europe)', 'India', 'Japan', 'UK'];
     const types = ['Communication', 'Earth Observation', 'Navigation', 'Military', 'Weather'];
-    for(let i=0; i<400; i++) {
+    for(let i=0; i<limit; i++) {
       sats.push({
         id: `sat-${i}`,
         name: `SAT-NORAD-${Math.floor(Math.random()*50000)+10000}`,
@@ -270,10 +266,10 @@ export default function App() {
     return sats;
   };
 
-  const generateSimulatedShips = () => {
+  const generateSimulatedShips = (limit: number) => {
     const ships = [];
     const types = ['Cargo Vessel', 'Oil Tanker', 'Passenger/Cruise', 'Fishing', 'Military'];
-    for(let i=0; i<500; i++) {
+    for(let i=0; i<limit; i++) {
       ships.push({
         id: `ship-${i}`,
         name: `Vessel ${Math.floor(Math.random()*9000)+100}`,
@@ -296,7 +292,8 @@ export default function App() {
       try {
         const eqRes = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson');
         const eqData = await eqRes.json();
-        setEarthquakes(eqData.features);
+        // Limit earthquakes to save RAM
+        setEarthquakes((eqData.features || []).slice(0, maxEntities));
       } catch (e) {}
     }
 
@@ -318,10 +315,12 @@ export default function App() {
               heading: f[10] || 0,
               squawk: f[14] || 'N/A'
             }))
-            .slice(0, 800); 
+            .slice(0, maxEntities); // RAM Optimierung: Limit auf maxEntities
           setFlights(parsedFlights);
         }
-      } catch (e) {}
+      } catch (e) {
+        console.warn("OpenSky Rate Limit erreicht.");
+      }
     }
 
     if (layers.issTracker) {
@@ -336,27 +335,28 @@ export default function App() {
       try {
         const eonetRes = await fetch('https://eonet.gsfc.nasa.gov/api/v3/events?status=open');
         const eonetData = await eonetRes.json();
-        if (layers.wildfires) setWildfiresData(eonetData.events.filter((e: any) => e.categories[0].id === 'wildfires'));
-        if (layers.volcanoes) setVolcanoesData(eonetData.events.filter((e: any) => e.categories[0].id === 'volcanoes'));
-        if (layers.seaIce) setSeaIceData(eonetData.events.filter((e: any) => e.categories[0].id === 'seaIce'));
-        if (layers.severeStorms) setStormsData(eonetData.events.filter((e: any) => e.categories[0].id === 'severeStorms'));
+        if (layers.wildfires) setWildfiresData(eonetData.events.filter((e: any) => e.categories[0].id === 'wildfires').slice(0, maxEntities));
+        if (layers.volcanoes) setVolcanoesData(eonetData.events.filter((e: any) => e.categories[0].id === 'volcanoes').slice(0, maxEntities));
+        if (layers.seaIce) setSeaIceData(eonetData.events.filter((e: any) => e.categories[0].id === 'seaIce').slice(0, maxEntities));
+        if (layers.severeStorms) setStormsData(eonetData.events.filter((e: any) => e.categories[0].id === 'severeStorms').slice(0, maxEntities));
       } catch (e) {}
     }
 
     if (layers.satellites && satellitesData.length === 0) {
-      setSatellitesData(generateSimulatedSatellites());
+      setSatellitesData(generateSimulatedSatellites(maxEntities));
     }
     if (layers.globalShips && shipsData.length === 0) {
-      setShipsData(generateSimulatedShips());
+      setShipsData(generateSimulatedShips(maxEntities));
     }
 
     setLastSync(now);
     setTimeout(() => setIsSyncing(false), 800);
-  }, [layers, satellitesData.length, shipsData.length]);
+  }, [layers, satellitesData.length, shipsData.length, maxEntities]);
 
   useEffect(() => {
     fetchLiveData(); 
-    const interval = setInterval(fetchLiveData, 15000);
+    // Polling-Intervall etwas entspannt, um Limits hinauszuzögern, bis AWS Backend steht
+    const interval = setInterval(fetchLiveData, 30000); 
     return () => clearInterval(interval);
   }, [fetchLiveData]);
 
@@ -404,7 +404,6 @@ export default function App() {
         }
       `}</style>
 
-      {/* --- SPLAT iFRAME MODAL --- */}
       {activeSplatUrl && (
         <div style={{
           position: 'absolute', top: isMobile ? '5%' : '10%', left: isMobile ? '5%' : '15%', 
@@ -431,12 +430,11 @@ export default function App() {
         </div>
       )}
 
-      {/* --- NEU: CUSTOM DATA PANEL STATT CESIUM INFOBOX --- */}
       {selectedFeature && (
         <div style={{
           position: 'absolute', 
           top: isMobile ? 'auto' : '20px', 
-          bottom: isMobile ? '90px' : 'auto', // Auf Mobile über dem runden Button
+          bottom: isMobile ? '90px' : 'auto', 
           right: isMobile ? '5%' : '20px', 
           width: isMobile ? '90%' : '340px', 
           zIndex: 150,
@@ -525,8 +523,12 @@ export default function App() {
           </button>
         </div>
 
+        {/* Layer Controls & Performance Settings */}
         <div style={{ marginBottom: '20px' }}>
-          <strong style={{ color: '#fff' }}>📡 Data Layers</strong>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong style={{ color: '#fff' }}>📡 Data Layers</strong>
+            <span style={{ fontSize: '0.75rem', color: '#ff3333' }}>MAX: {maxEntities}</span>
+          </div>
           <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {Object.keys(layers).map(layer => (
               <label key={layer} style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: '#ccc', fontSize: '0.9rem', padding: '4px 0' }}>
@@ -581,7 +583,7 @@ export default function App() {
         full 
         timeline={!isMobile} 
         animation={!isMobile} 
-        infoBox={false} // INFOBOX DEAKTIVIERT!
+        infoBox={false} 
         shadows={globeLighting} 
         geocoder={true} 
         homeButton={true} 
@@ -598,7 +600,6 @@ export default function App() {
           <CameraFlyTo destination={Cartesian3.fromDegrees(activeBookmark.lng, activeBookmark.lat, activeBookmark.height)} orientation={{ heading: CesiumMath.toRadians(activeBookmark.heading), pitch: CesiumMath.toRadians(activeBookmark.pitch), roll: 0.0 }} duration={3} onComplete={() => setActiveBookmark(null)} />
         )}
 
-        {/* --- ENTITIES (Ohne alte Description/InfoBox HTML) --- */}
         {layers.digi4 && DIGI4_LINKS.map((loc, idx) => (
           <Entity 
             key={`digi4-${idx}`} name={`Digi4 Cam: ${loc.name}`} position={Cartesian3.fromDegrees(loc.lng, loc.lat, 0)}
