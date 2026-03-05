@@ -2,6 +2,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, ScanCommand, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from '$amplify/env/syncFlights';
+import * as https from 'https';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -15,22 +16,54 @@ const chunkArray = (arr: any[], size: number) => {
   return chunks;
 };
 
-export const handler = async (event: any) => {
-  console.log('Fetching OpenSky data...');
-  
-  try {
-    // Timeout auf 60 Sekunden erhöhen und User-Agent setzen
-    const res = await fetch('https://opensky-network.org/api/states/all', {
-      signal: AbortSignal.timeout(60000), 
+// Eigener Fetch-Wrapper, um den 10-Sekunden-Bug von Node.js fetch() zu umgehen
+const fetchOpenSky = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'opensky-network.org',
+      port: 443,
+      path: '/api/states/all',
+      method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WorldViewApp/1.0 AWS-Lambda',
         'Accept': 'application/json'
+      },
+      timeout: 45000 // 45 Sekunden hartes Timeout für die Verbindung
+    };
+
+    const req = https.request(options, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`OpenSky API Error: ${res.statusCode}`));
+        return;
       }
+      
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          reject(new Error('Failed to parse OpenSky JSON'));
+        }
+      });
     });
 
-    if (!res.ok) throw new Error(`OpenSky API Error: ${res.status}`);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('HTTPS Connection Timeout nach 45 Sekunden'));
+    });
+
+    req.on('error', (e) => reject(e));
+    req.end();
+  });
+};
+
+export const handler = async (event: any) => {
+  console.log('Fetching OpenSky data via native HTTPS...');
+  
+  try {
+    const data = await fetchOpenSky();
     
-    const data = await res.json();
     const flights = (data.states || [])
       .filter((f: any) => f[5] && f[6]) // Nur Flüge mit Koordinaten
       .map((f: any) => ({
