@@ -7,7 +7,7 @@ import * as https from 'https';
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 
-// Hilfsfunktion: Teilt ein riesiges Array in kleine Arrays auf (DynamoDB Limit ist 25)
+// Hilfsfunktion: Teilt ein riesiges Array in kleine Arrays auf
 const chunkArray = (arr: any[], size: number) => {
   const chunks = [];
   for (let i = 0; i < arr.length; i += size) {
@@ -16,24 +16,33 @@ const chunkArray = (arr: any[], size: number) => {
   return chunks;
 };
 
-// Eigener Fetch-Wrapper, um den 10-Sekunden-Bug von Node.js fetch() zu umgehen
+// Eigener Fetch-Wrapper mit Authentifizierung
 const fetchOpenSky = (): Promise<any> => {
   return new Promise((resolve, reject) => {
+    
+    // AWS Secrets werden zur Laufzeit in process.env injiziert!
+    // Wir nutzen process.env, da der strenge Amplify TS-Compiler bei Secrets manchmal blockiert.
+    const user = process.env.OPENSKY_USERNAME || '';
+    const pass = process.env.OPENSKY_PASSWORD || '';
+    const authString = `${user}:${pass}`;
+    const authBase64 = Buffer.from(authString).toString('base64');
+
     const options = {
       hostname: 'opensky-network.org',
       port: 443,
       path: '/api/states/all',
       method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WorldViewApp/1.0 AWS-Lambda',
-        'Accept': 'application/json'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WorldViewApp/1.0',
+        'Accept': 'application/json',
+        'Authorization': `Basic ${authBase64}` // Anmeldung
       },
-      timeout: 45000 // 45 Sekunden hartes Timeout für die Verbindung
+      timeout: 45000 
     };
 
     const req = https.request(options, (res) => {
       if (res.statusCode !== 200) {
-        reject(new Error(`OpenSky API Error: ${res.statusCode}`));
+        reject(new Error(`OpenSky API Error: HTTP ${res.statusCode}`));
         return;
       }
       
@@ -59,13 +68,13 @@ const fetchOpenSky = (): Promise<any> => {
 };
 
 export const handler = async (event: any) => {
-  console.log('Fetching OpenSky data via native HTTPS...');
+  console.log('Fetching authenticated OpenSky data...');
   
   try {
     const data = await fetchOpenSky();
     
     const flights = (data.states || [])
-      .filter((f: any) => f[5] && f[6]) // Nur Flüge mit Koordinaten
+      .filter((f: any) => f[5] && f[6])
       .map((f: any) => ({
         id: f[0],
         callsign: f[1]?.trim() || 'UNKNOWN',
@@ -80,7 +89,7 @@ export const handler = async (event: any) => {
 
     const tableName = env.AMPLIFY_DATA_FLIGHT_TABLE_NAME;
 
-    // 1. Alte Daten löschen (im Batch)
+    // 1. Alte Daten löschen
     console.log('Scanning old flights to delete...');
     const scanResponse = await docClient.send(new ScanCommand({
       TableName: tableName
@@ -99,7 +108,7 @@ export const handler = async (event: any) => {
       }
     }
 
-    // 2. Neue 10.000+ Daten speichern (im Batch)
+    // 2. Neue Daten speichern
     console.log(`Writing ${flights.length} new flights...`);
     const putRequests = flights.map((flight: any) => ({
       PutRequest: { Item: flight }
