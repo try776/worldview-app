@@ -19,7 +19,15 @@ export const handler = async (event: any) => {
   console.log('Fetching OpenSky data...');
   
   try {
-    const res = await fetch('https://opensky-network.org/api/states/all');
+    // Timeout auf 60 Sekunden erhöhen und User-Agent setzen
+    const res = await fetch('https://opensky-network.org/api/states/all', {
+      signal: AbortSignal.timeout(60000), 
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+      }
+    });
+
     if (!res.ok) throw new Error(`OpenSky API Error: ${res.status}`);
     
     const data = await res.json();
