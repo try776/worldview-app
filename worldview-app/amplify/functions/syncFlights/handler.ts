@@ -1,3 +1,4 @@
+// amplify/functions/syncFlights/handler.ts
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, ScanCommand, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from '$amplify/env/syncFlights';
@@ -17,7 +18,7 @@ const chunkArray = (arr: any[], size: number) => {
 const fetchOpenSky = (): Promise<any> => {
   return new Promise((resolve, reject) => {
     
-    // @ts-ignore - Unterdrückt den TS-Fehler, da die Typen oft zeitverzögert generiert werden
+    // @ts-ignore
     const user = env.OPENSKY_USERNAME || process.env.OPENSKY_USERNAME || '';
     // @ts-ignore
     const pass = env.OPENSKY_PASSWORD || process.env.OPENSKY_PASSWORD || '';
@@ -25,7 +26,8 @@ const fetchOpenSky = (): Promise<any> => {
     if (!user || !pass) {
       console.error('❌ FEHLER: Zugangsdaten fehlen! Lambda hat keine Berechtigung für die Secrets.');
     } else {
-      console.log('✅ Zugangsdaten geladen. Logge bei OpenSky ein...');
+      // DEBUG LOG: Gibt den genutzten Benutzernamen aus (eingefasst in Klammern, um unsichtbare Leerzeichen zu entlarven)
+      console.log(`✅ Zugangsdaten geladen. Logge bei OpenSky ein als User: [${user}]`);
     }
 
     const authString = `${user}:${pass}`;
@@ -124,4 +126,4 @@ export const handler = async (event: any) => {
     console.error('Error syncing flights:', error);
     return { statusCode: 500, body: 'Error' };
   }
-}; 
+};
