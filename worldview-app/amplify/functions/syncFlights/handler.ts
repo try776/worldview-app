@@ -15,40 +15,24 @@ const chunkArray = (arr: any[], size: number) => {
   return chunks;
 };
 
-const fetchOpenSky = (): Promise<any> => {
+// Neuer Fetch-Wrapper für Airplanes.live (Kein Login nötig, keine AWS-Blockade!)
+const fetchAirplanesLive = (): Promise<any> => {
   return new Promise((resolve, reject) => {
-    
-    // @ts-ignore
-    const user = env.OPENSKY_USERNAME || process.env.OPENSKY_USERNAME || '';
-    // @ts-ignore
-    const pass = env.OPENSKY_PASSWORD || process.env.OPENSKY_PASSWORD || '';
-
-    if (!user || !pass) {
-      console.error('❌ FEHLER: Zugangsdaten fehlen! Lambda hat keine Berechtigung für die Secrets.');
-    } else {
-      // DEBUG LOG: Gibt den genutzten Benutzernamen aus (eingefasst in Klammern, um unsichtbare Leerzeichen zu entlarven)
-      console.log(`✅ Zugangsdaten geladen. Logge bei OpenSky ein als User: [${user}]`);
-    }
-
-    const authString = `${user}:${pass}`;
-    const authBase64 = Buffer.from(authString).toString('base64');
-
     const options = {
-      hostname: 'opensky-network.org',
+      hostname: 'api.airplanes.live',
       port: 443,
-      path: '/api/states/all',
+      path: '/v2/all',
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WorldViewApp/1.0',
-        'Accept': 'application/json',
-        'Authorization': `Basic ${authBase64}`
+        'Accept': 'application/json'
       },
       timeout: 45000 
     };
 
     const req = https.request(options, (res) => {
       if (res.statusCode !== 200) {
-        reject(new Error(`OpenSky API Error: HTTP ${res.statusCode}`));
+        reject(new Error(`Airplanes.live API Error: HTTP ${res.statusCode}`));
         return;
       }
       
@@ -58,7 +42,7 @@ const fetchOpenSky = (): Promise<any> => {
         try {
           resolve(JSON.parse(body));
         } catch (e) {
-          reject(new Error('Failed to parse OpenSky JSON'));
+          reject(new Error('Failed to parse JSON'));
         }
       });
     });
@@ -74,25 +58,31 @@ const fetchOpenSky = (): Promise<any> => {
 };
 
 export const handler = async (event: any) => {
+  console.log('Fetching live data from Airplanes.live...');
+
   try {
-    const data = await fetchOpenSky();
+    const data = await fetchAirplanesLive();
     
-    const flights = (data.states || [])
-      .filter((f: any) => f[5] && f[6])
+    // Airplanes.live liefert die Daten im Array "ac" (Aircraft)
+    const flights = (data.ac || [])
+      .filter((f: any) => f.lat && f.lon) // Nur gültige Koordinaten
       .map((f: any) => ({
-        id: f[0],
-        callsign: f[1]?.trim() || 'UNKNOWN',
-        country: f[2] || 'Unknown',
-        lng: f[5],
-        lat: f[6],
-        alt: f[7] || 10000,
-        velocity: f[9] || 0,
-        heading: f[10] || 0,
-        squawk: f[14] || 'N/A'
+        id: f.hex || Math.random().toString(36).substring(7), // Eindeutige ICAO Hex ID
+        callsign: f.flight?.trim() || 'UNKNOWN',
+        country: f.r || 'Unknown', // Registration als Herkunft
+        lng: f.lon,
+        lat: f.lat,
+        alt: (f.alt_baro && f.alt_baro !== 'ground') ? f.alt_baro * 0.3048 : 0, // Fuß in Meter umrechnen
+        velocity: f.gs ? f.gs * 0.51444 : 0, // Knoten in m/s umrechnen
+        heading: f.track || 0,
+        squawk: f.squawk || 'N/A'
       }));
 
+    // KOSTENKONTROLLE: Wir begrenzen auf 1500 Einträge, um AWS DynamoDB Free Tier nicht zu sprengen
+    const flightsToSave = flights.slice(0, 1500);
     const tableName = env.AMPLIFY_DATA_FLIGHT_TABLE_NAME;
 
+    console.log('Scanning old flights to delete...');
     const scanResponse = await docClient.send(new ScanCommand({ TableName: tableName }));
     
     if (scanResponse.Items && scanResponse.Items.length > 0) {
@@ -108,7 +98,8 @@ export const handler = async (event: any) => {
       }
     }
 
-    const putRequests = flights.map((flight: any) => ({
+    console.log(`Writing ${flightsToSave.length} new flights to database...`);
+    const putRequests = flightsToSave.map((flight: any) => ({
       PutRequest: { Item: flight }
     }));
 
@@ -119,7 +110,7 @@ export const handler = async (event: any) => {
       }));
     }
 
-    console.log(`Successfully synced ${flights.length} flights worldwide.`);
+    console.log(`Successfully synced ${flightsToSave.length} flights worldwide.`);
     return { statusCode: 200, body: 'Success' };
 
   } catch (error) {
