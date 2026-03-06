@@ -124,4 +124,4 @@ export const handler = async (event: any) => {
     console.error('Error syncing flights:', error);
     return { statusCode: 500, body: 'Error' };
   }
-};
+}; 
