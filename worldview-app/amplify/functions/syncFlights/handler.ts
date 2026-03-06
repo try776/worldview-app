@@ -1,4 +1,3 @@
-// amplify/functions/syncFlights/handler.ts
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, ScanCommand, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from '$amplify/env/syncFlights';
@@ -7,7 +6,6 @@ import * as https from 'https';
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 
-// Hilfsfunktion: Teilt ein riesiges Array in kleine Arrays auf
 const chunkArray = (arr: any[], size: number) => {
   const chunks = [];
   for (let i = 0; i < arr.length; i += size) {
@@ -16,14 +14,20 @@ const chunkArray = (arr: any[], size: number) => {
   return chunks;
 };
 
-// Eigener Fetch-Wrapper mit Authentifizierung
 const fetchOpenSky = (): Promise<any> => {
   return new Promise((resolve, reject) => {
     
-    // AWS Secrets werden zur Laufzeit in process.env injiziert!
-    // Wir nutzen process.env, da der strenge Amplify TS-Compiler bei Secrets manchmal blockiert.
-    const user = process.env.OPENSKY_USERNAME || '';
-    const pass = process.env.OPENSKY_PASSWORD || '';
+    // @ts-ignore - Unterdrückt den TS-Fehler, da die Typen oft zeitverzögert generiert werden
+    const user = env.OPENSKY_USERNAME || process.env.OPENSKY_USERNAME || '';
+    // @ts-ignore
+    const pass = env.OPENSKY_PASSWORD || process.env.OPENSKY_PASSWORD || '';
+
+    if (!user || !pass) {
+      console.error('❌ FEHLER: Zugangsdaten fehlen! Lambda hat keine Berechtigung für die Secrets.');
+    } else {
+      console.log('✅ Zugangsdaten geladen. Logge bei OpenSky ein...');
+    }
+
     const authString = `${user}:${pass}`;
     const authBase64 = Buffer.from(authString).toString('base64');
 
@@ -35,7 +39,7 @@ const fetchOpenSky = (): Promise<any> => {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WorldViewApp/1.0',
         'Accept': 'application/json',
-        'Authorization': `Basic ${authBase64}` // Anmeldung
+        'Authorization': `Basic ${authBase64}`
       },
       timeout: 45000 
     };
@@ -59,7 +63,7 @@ const fetchOpenSky = (): Promise<any> => {
 
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error('HTTPS Connection Timeout nach 45 Sekunden'));
+      reject(new Error('HTTPS Connection Timeout'));
     });
 
     req.on('error', (e) => reject(e));
@@ -68,8 +72,6 @@ const fetchOpenSky = (): Promise<any> => {
 };
 
 export const handler = async (event: any) => {
-  console.log('Fetching authenticated OpenSky data...');
-  
   try {
     const data = await fetchOpenSky();
     
@@ -89,11 +91,7 @@ export const handler = async (event: any) => {
 
     const tableName = env.AMPLIFY_DATA_FLIGHT_TABLE_NAME;
 
-    // 1. Alte Daten löschen
-    console.log('Scanning old flights to delete...');
-    const scanResponse = await docClient.send(new ScanCommand({
-      TableName: tableName
-    }));
+    const scanResponse = await docClient.send(new ScanCommand({ TableName: tableName }));
     
     if (scanResponse.Items && scanResponse.Items.length > 0) {
       const deleteRequests = scanResponse.Items.map(item => ({
@@ -108,8 +106,6 @@ export const handler = async (event: any) => {
       }
     }
 
-    // 2. Neue Daten speichern
-    console.log(`Writing ${flights.length} new flights...`);
     const putRequests = flights.map((flight: any) => ({
       PutRequest: { Item: flight }
     }));
